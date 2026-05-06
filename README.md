@@ -62,6 +62,7 @@ Traffic Generator ──HTTP──► Coordinator (FastAPI :8000)
 ├── db/                   # PostgreSQL schema + Alembic migrations
 ├── tests/                # Unit, integration, and load tests
 ├── docs/                 # Architecture decisions, metrics spec
+├── frontend/             # Next.js 14 dashboard (PCH Console)
 ├── config.yaml           # Master configuration (all services read this)
 └── requirements.txt      # Python dependencies
 ```
@@ -83,12 +84,12 @@ All services read `config.yaml`. Key parameters:
 
 - [x] **Phase 1** — Planning (scenarios, architecture, proto, schema)
 - [x] **Phase 2** — Infrastructure setup (Docker Compose, Prometheus, Grafana)
-- [ ] **Phase 3** — Backend core (hash ring, WFQ, traffic gen, allocation engine)
-- [ ] **Phase 4** — Database validation under load
-- [ ] **Phase 5** — ML integration (XGBoost + GRU + DAA)
-- [ ] **Phase 6** — Testing (unit, integration, load benchmarks)
-- [ ] **Phase 7** — Deployment & reproducibility
-- [ ] **Phase 8** — Post-launch improvements (optional)
+- [x] **Phase 3** — Backend core (hash ring, WFQ, traffic gen, allocation engine)
+- [x] **Phase 4** — Database validation under load
+- [x] **Phase 5** — Frontend dashboard (Next.js 14, glassmorphic UI)
+- [ ] **Phase 6** — ML integration (XGBoost + GRU + DAA)
+- [ ] **Phase 7** — Testing (unit, integration, load benchmarks)
+- [ ] **Phase 8** — Deployment & reproducibility
 
 ## License
 
