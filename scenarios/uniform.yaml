@@ -1,0 +1,85 @@
+# ============================================================================
+# SCENARIO: Uniform Traffic
+# ============================================================================
+# Steady-state baseline with constant request rate and balanced class mix.
+# Used to establish baseline latency, throughput, and load distribution
+# before testing burst/spike resilience.
+# ============================================================================
+
+scenario:
+  name: "uniform"
+  description: "Constant-rate traffic with balanced Light/Medium/Heavy mix"
+  version: "1.0"
+
+traffic:
+  # Requests per second (sustained for full duration)
+  rps: 200
+  # Total scenario duration in seconds
+  duration_seconds: 300
+  # Ramp-up period: linearly increase from 0 to target RPS
+  ramp_up_seconds: 10
+
+  # Request class distribution (must sum to 1.0)
+  class_distribution:
+    light: 0.50     # GET API calls, ~50 ms execution
+    medium: 0.35    # DB queries, ~200 ms execution
+    heavy: 0.15     # ML inference / batch ops, ~1000 ms execution
+
+  # Arrival pattern
+  pattern:
+    type: "constant"       # constant rate, no spikes
+    jitter_pct: 5          # ±5% random jitter on inter-arrival time
+
+  # Simulated endpoint distribution
+  endpoints:
+    - path: "/api/search"
+      method: "GET"
+      weight: 0.30
+      avg_payload_bytes: 256
+    - path: "/api/data"
+      method: "POST"
+      weight: 0.25
+      avg_payload_bytes: 4096
+    - path: "/api/inference"
+      method: "POST"
+      weight: 0.15
+      avg_payload_bytes: 16384
+    - path: "/api/status"
+      method: "GET"
+      weight: 0.20
+      avg_payload_bytes: 128
+    - path: "/api/batch"
+      method: "POST"
+      weight: 0.10
+      avg_payload_bytes: 65536
+
+  # Source IDs simulate distinct clients
+  source_ids:
+    count: 50
+    prefix: "user_"
+
+# Evaluation: what to measure after this scenario completes
+evaluation:
+  metrics:
+    - name: "latency_p50_ms"
+      description: "Median request latency"
+    - name: "latency_p95_ms"
+      description: "95th percentile request latency"
+    - name: "latency_p99_ms"
+      description: "99th percentile request latency"
+    - name: "throughput_rps"
+      description: "Sustained requests per second processed"
+    - name: "load_variance_stddev"
+      description: "Standard deviation of CPU% across all nodes"
+    - name: "failure_rate_pct"
+      description: "Percentage of requests rejected or timed out"
+    - name: "avg_cpu_utilization_pct"
+      description: "Average CPU utilization across all nodes"
+    - name: "avg_routing_hops"
+      description: "Average number of Chord routing hops per request"
+
+  # SLO thresholds — alerts trigger if exceeded
+  slo_thresholds:
+    latency_p99_ms: 500
+    failure_rate_pct: 1.0
+    load_variance_stddev: 15.0

@@ -1,0 +1,75 @@
+{
+  "annotations": { "list": [] },
+  "editable": true,
+  "graphTooltip": 1,
+  "panels": [
+    {
+      "title": "Predicted vs Actual Heavy Request Rate",
+      "type": "timeseries",
+      "gridPos": { "h": 10, "w": 24, "x": 0, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "reqps" } },
+      "targets": [
+        { "expr": "paf_forecaster_predicted_heavy_rate", "legendFormat": "Predicted Heavy Rate", "refId": "A" },
+        { "expr": "rate(paf_requests_classified_total{class=\"Heavy\"}[10s])", "legendFormat": "Actual Heavy Rate", "refId": "B" }
+      ]
+    },
+    {
+      "title": "Burst Imminent Flag",
+      "type": "state-timeline",
+      "gridPos": { "h": 4, "w": 12, "x": 0, "y": 10 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        { "expr": "paf_forecaster_burst_imminent", "legendFormat": "Burst Imminent", "refId": "A" }
+      ]
+    },
+    {
+      "title": "Forecast Staleness (seconds)",
+      "type": "gauge",
+      "gridPos": { "h": 4, "w": 6, "x": 12, "y": 10 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "s", "min": 0, "max": 30, "thresholds": { "steps": [
+        { "color": "green", "value": null },
+        { "color": "yellow", "value": 10 },
+        { "color": "red", "value": 15 }
+      ]}}},
+      "targets": [
+        { "expr": "time() - paf_forecaster_last_update_timestamp", "refId": "A" }
+      ]
+    },
+    {
+      "title": "Forecaster Inference Time",
+      "type": "stat",
+      "gridPos": { "h": 4, "w": 6, "x": 18, "y": 10 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "ms" } },
+      "targets": [
+        { "expr": "paf_forecaster_inference_ms", "refId": "A" }
+      ]
+    },
+    {
+      "title": "DAA Vnode Adjustments over Time",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 14 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        { "expr": "paf_node_vnode_count", "legendFormat": "{{node}}", "refId": "A" }
+      ]
+    },
+    {
+      "title": "Feedback Events (rate)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 14 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        { "expr": "rate(paf_feedback_events_total[5m])", "legendFormat": "{{action_type}}", "refId": "A" }
+      ]
+    }
+  ],
+  "schemaVersion": 39,
+  "tags": ["paf", "forecaster", "daa"],
+  "time": { "from": "now-15m", "to": "now" },
+  "title": "PAF — Forecaster Prediction vs Actual",
+  "uid": "paf-forecaster",
+  "version": 1
+}

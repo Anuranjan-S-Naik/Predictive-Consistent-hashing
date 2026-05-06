@@ -1,0 +1,110 @@
+# ============================================================================
+# SCENARIO: Random (Mixed / Chaotic) Traffic
+# ============================================================================
+# Combines elements of all other patterns: variable RPS, shifting class
+# distributions, random micro-bursts. Tests general robustness when
+# traffic doesn't follow any clean predictable pattern.
+# ============================================================================
+
+scenario:
+  name: "random"
+  description: "Mixed chaotic traffic with variable RPS, shifting class ratios, and random micro-bursts"
+  version: "1.0"
+
+traffic:
+  # Average requests per second (actual varies ±50%)
+  rps: 250
+  # Total scenario duration in seconds
+  duration_seconds: 300
+  # Ramp-up period
+  ramp_up_seconds: 10
+
+  # Base class distribution (shifts randomly every phase_duration_sec)
+  class_distribution:
+    light: 0.40
+    medium: 0.35
+    heavy: 0.25
+
+  # Arrival pattern: random mixed
+  pattern:
+    type: "random_mixed"
+    # RPS varies randomly within this range every phase
+    rps_range:
+      min: 100
+      max: 500
+    # Duration of each random phase (seconds) before RPS/class mix changes
+    phase_duration_sec: 15
+    # Random micro-bursts within each phase
+    micro_burst:
+      enabled: true
+      probability_per_phase: 0.40      # 40% chance of micro-burst per phase
+      duration_sec: 3                   # Micro-burst lasts 3 seconds
+      rps_multiplier: 2.5              # 2.5× the current phase RPS
+    # Class distribution shifts randomly within these bounds each phase
+    class_distribution_ranges:
+      light:
+        min: 0.20
+        max: 0.60
+      medium:
+        min: 0.20
+        max: 0.50
+      heavy:
+        min: 0.10
+        max: 0.40
+    # Jitter on inter-arrival time
+    jitter_pct: 15
+
+  # Simulated endpoint distribution
+  endpoints:
+    - path: "/api/search"
+      method: "GET"
+      weight: 0.30
+      avg_payload_bytes: 256
+    - path: "/api/data"
+      method: "POST"
+      weight: 0.25
+      avg_payload_bytes: 4096
+    - path: "/api/inference"
+      method: "POST"
+      weight: 0.15
+      avg_payload_bytes: 16384
+    - path: "/api/status"
+      method: "GET"
+      weight: 0.20
+      avg_payload_bytes: 128
+    - path: "/api/batch"
+      method: "POST"
+      weight: 0.10
+      avg_payload_bytes: 65536
+
+  source_ids:
+    count: 100
+    prefix: "user_"
+
+evaluation:
+  metrics:
+    - name: "latency_p50_ms"
+      description: "Median request latency"
+    - name: "latency_p95_ms"
+      description: "95th percentile request latency"
+    - name: "latency_p99_ms"
+      description: "99th percentile request latency"
+    - name: "throughput_rps"
+      description: "Sustained requests per second processed"
+    - name: "load_variance_stddev"
+      description: "Standard deviation of CPU% across all nodes"
+    - name: "failure_rate_pct"
+      description: "Percentage of requests rejected or timed out"
+    - name: "avg_cpu_utilization_pct"
+      description: "Average CPU utilization across all nodes"
+    - name: "avg_routing_hops"
+      description: "Average number of Chord routing hops per request"
+    - name: "adaptation_frequency"
+      description: "Number of DAA vnode adjustments per minute"
+    - name: "forecast_error_pct"
+      description: "Forecaster prediction error under chaotic conditions"
+
+  slo_thresholds:
+    latency_p99_ms: 2000
+    failure_rate_pct: 5.0
+    load_variance_stddev: 30.0

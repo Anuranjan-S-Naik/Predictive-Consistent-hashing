@@ -1,0 +1,49 @@
+# ============================================================================
+# Prometheus Alert Rules — PAF
+# ============================================================================
+
+groups:
+  - name: paf_node_alerts
+    rules:
+      - alert: NodeHighCPU
+        expr: paf_node_cpu_percent > 90
+        for: 30s
+        labels:
+          severity: warning
+        annotations:
+          summary: "Node {{ $labels.node }} CPU above 90%"
+          description: "{{ $labels.node }} has CPU at {{ $value }}% for over 30 seconds."
+
+      - alert: NodeQueueSaturation
+        expr: paf_node_queue_depth_total > 400
+        for: 15s
+        labels:
+          severity: warning
+        annotations:
+          summary: "Node {{ $labels.node }} queue near capacity"
+          description: "{{ $labels.node }} total queue depth at {{ $value }}."
+
+      - alert: HighFailureRate
+        expr: rate(paf_requests_rejected_total[1m]) / rate(paf_requests_total[1m]) > 0.05
+        for: 30s
+        labels:
+          severity: critical
+        annotations:
+          summary: "Failure rate exceeds 5%"
+          description: "Request failure rate is {{ $value | humanizePercentage }}."
+
+      - alert: CoordinatorDown
+        expr: up{job="coordinator"} == 0
+        for: 10s
+        labels:
+          severity: critical
+        annotations:
+          summary: "Coordinator is unreachable"
+
+      - alert: NodeDown
+        expr: up{job="nodes"} == 0
+        for: 10s
+        labels:
+          severity: critical
+        annotations:
+          summary: "Node {{ $labels.node }} is unreachable"

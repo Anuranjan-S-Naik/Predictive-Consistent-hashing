@@ -1,0 +1,98 @@
+# ============================================================================
+# SCENARIO: Bursty Traffic (Poisson Spikes)
+# ============================================================================
+# Models realistic web traffic with periodic bursts of heavy requests.
+# Poisson-distributed spike intervals test the forecaster's ability to
+# predict and prepare for incoming heavy load before it arrives.
+# ============================================================================
+
+scenario:
+  name: "bursty"
+  description: "Baseline traffic with periodic Poisson-distributed heavy-request spikes"
+  version: "1.0"
+
+traffic:
+  # Baseline requests per second (between bursts)
+  rps: 200
+  # Total scenario duration in seconds
+  duration_seconds: 300
+  # Ramp-up period
+  ramp_up_seconds: 10
+
+  # Baseline class distribution (between bursts)
+  class_distribution:
+    light: 0.55
+    medium: 0.30
+    heavy: 0.15
+
+  # Arrival pattern with Poisson bursts
+  pattern:
+    type: "poisson_burst"
+    # Average interval between burst events (seconds)
+    burst_interval_mean_sec: 30
+    # Duration of each burst (seconds)
+    burst_duration_sec: 5
+    # Multiplier applied to RPS during burst
+    burst_rps_multiplier: 3.0
+    # Class distribution DURING burst (heavy-skewed)
+    burst_class_distribution:
+      light: 0.20
+      medium: 0.25
+      heavy: 0.55
+    # Jitter on inter-arrival time between bursts
+    jitter_pct: 10
+
+  # Simulated endpoint distribution
+  endpoints:
+    - path: "/api/search"
+      method: "GET"
+      weight: 0.30
+      avg_payload_bytes: 256
+    - path: "/api/data"
+      method: "POST"
+      weight: 0.25
+      avg_payload_bytes: 4096
+    - path: "/api/inference"
+      method: "POST"
+      weight: 0.15
+      avg_payload_bytes: 16384
+    - path: "/api/status"
+      method: "GET"
+      weight: 0.20
+      avg_payload_bytes: 128
+    - path: "/api/batch"
+      method: "POST"
+      weight: 0.10
+      avg_payload_bytes: 65536
+
+  source_ids:
+    count: 50
+    prefix: "user_"
+
+evaluation:
+  metrics:
+    - name: "latency_p50_ms"
+      description: "Median request latency"
+    - name: "latency_p95_ms"
+      description: "95th percentile request latency"
+    - name: "latency_p99_ms"
+      description: "99th percentile request latency"
+    - name: "throughput_rps"
+      description: "Sustained requests per second processed"
+    - name: "load_variance_stddev"
+      description: "Standard deviation of CPU% across all nodes"
+    - name: "failure_rate_pct"
+      description: "Percentage of requests rejected or timed out"
+    - name: "avg_cpu_utilization_pct"
+      description: "Average CPU utilization across all nodes"
+    - name: "avg_routing_hops"
+      description: "Average number of Chord routing hops per request"
+    - name: "burst_detection_accuracy_pct"
+      description: "Percentage of bursts correctly predicted by forecaster"
+    - name: "vnode_adaptation_lag_ms"
+      description: "Time from burst start to DAA vnode adjustment"
+
+  slo_thresholds:
+    latency_p99_ms: 1500
+    failure_rate_pct: 3.0
+    load_variance_stddev: 25.0

@@ -1,0 +1,54 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Environment
+.env
+
+# Docker
+docker-compose.override.yml
+
+# ML Models (large files — track with Git LFS if needed)
+models/*.joblib
+models/*.pt
+models/*.pkl
+!models/.gitkeep
+
+# Data
+*.csv
+*.parquet
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Coverage
+htmlcov/
+.coverage
+coverage.xml
+
+# Pytest
+.pytest_cache/
+
+# Word docs (source — use .md versions)
+*.docx

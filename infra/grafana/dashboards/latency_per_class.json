@@ -1,0 +1,70 @@
+{
+  "annotations": { "list": [] },
+  "editable": true,
+  "graphTooltip": 1,
+  "panels": [
+    {
+      "title": "Overall Latency (p50 / p95 / p99)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "ms" } },
+      "targets": [
+        { "expr": "histogram_quantile(0.50, rate(paf_request_latency_ms_bucket[1m]))", "legendFormat": "p50", "refId": "A" },
+        { "expr": "histogram_quantile(0.95, rate(paf_request_latency_ms_bucket[1m]))", "legendFormat": "p95", "refId": "B" },
+        { "expr": "histogram_quantile(0.99, rate(paf_request_latency_ms_bucket[1m]))", "legendFormat": "p99", "refId": "C" }
+      ]
+    },
+    {
+      "title": "Latency p95 by Class — Light",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 8 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "ms", "color": { "mode": "fixed", "fixedColor": "green" } } },
+      "targets": [
+        { "expr": "histogram_quantile(0.50, rate(paf_request_latency_ms_bucket{class=\"Light\"}[1m]))", "legendFormat": "p50", "refId": "A" },
+        { "expr": "histogram_quantile(0.95, rate(paf_request_latency_ms_bucket{class=\"Light\"}[1m]))", "legendFormat": "p95", "refId": "B" },
+        { "expr": "histogram_quantile(0.99, rate(paf_request_latency_ms_bucket{class=\"Light\"}[1m]))", "legendFormat": "p99", "refId": "C" }
+      ]
+    },
+    {
+      "title": "Latency p95 by Class — Medium",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 8 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "ms", "color": { "mode": "fixed", "fixedColor": "yellow" } } },
+      "targets": [
+        { "expr": "histogram_quantile(0.50, rate(paf_request_latency_ms_bucket{class=\"Medium\"}[1m]))", "legendFormat": "p50", "refId": "A" },
+        { "expr": "histogram_quantile(0.95, rate(paf_request_latency_ms_bucket{class=\"Medium\"}[1m]))", "legendFormat": "p95", "refId": "B" },
+        { "expr": "histogram_quantile(0.99, rate(paf_request_latency_ms_bucket{class=\"Medium\"}[1m]))", "legendFormat": "p99", "refId": "C" }
+      ]
+    },
+    {
+      "title": "Latency p95 by Class — Heavy",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 8 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "ms", "color": { "mode": "fixed", "fixedColor": "red" } } },
+      "targets": [
+        { "expr": "histogram_quantile(0.50, rate(paf_request_latency_ms_bucket{class=\"Heavy\"}[1m]))", "legendFormat": "p50", "refId": "A" },
+        { "expr": "histogram_quantile(0.95, rate(paf_request_latency_ms_bucket{class=\"Heavy\"}[1m]))", "legendFormat": "p95", "refId": "B" },
+        { "expr": "histogram_quantile(0.99, rate(paf_request_latency_ms_bucket{class=\"Heavy\"}[1m]))", "legendFormat": "p99", "refId": "C" }
+      ]
+    },
+    {
+      "title": "Latency Heatmap",
+      "type": "heatmap",
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 16 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        { "expr": "rate(paf_request_latency_ms_bucket[1m])", "legendFormat": "{{le}}", "refId": "A", "format": "heatmap" }
+      ]
+    }
+  ],
+  "schemaVersion": 39,
+  "tags": ["paf", "latency"],
+  "time": { "from": "now-15m", "to": "now" },
+  "title": "PAF — Latency p50/p95/p99 per Class",
+  "uid": "paf-latency-per-class",
+  "version": 1
+}

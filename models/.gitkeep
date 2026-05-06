@@ -1,0 +1,6 @@
+# ML Models Directory
+# This directory stores serialized ML model artifacts.
+# Phase 5 will populate:
+#   - classifier_v1.joblib  (XGBoost request classifier)
+#   - forecaster_v1.pt      (GRU traffic forecaster)
+#   - registry.json          (Model metadata)

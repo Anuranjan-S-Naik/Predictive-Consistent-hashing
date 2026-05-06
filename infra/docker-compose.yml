@@ -1,0 +1,425 @@
+# ============================================================================
+# Predictive Adaptive Request Allocation Framework
+# Docker Compose — Full Infrastructure Stack
+# ============================================================================
+# Usage:
+#   docker compose up --build          (start all services)
+#   docker compose up --build -d       (start detached)
+#   docker compose down -v             (stop + remove volumes)
+# ============================================================================
+
+services:
+  # ========================================================================
+  # COORDINATOR — FastAPI + ML engines + DAA + Hash Ring
+  # ========================================================================
+  coordinator:
+    build:
+      context: ..
+      dockerfile: infra/Dockerfile.coordinator
+    container_name: paf_coordinator
+    ports:
+      - "${COORDINATOR_PORT:-8000}:8000"       # FastAPI HTTP
+      - "${COORDINATOR_GRPC_PORT:-50050}:50050" # gRPC listen
+    environment:
+      - COORDINATOR_HOST=0.0.0.0
+      - COORDINATOR_PORT=8000
+      - COORDINATOR_GRPC_PORT=50050
+      - REDIS_URL=redis://redis:6379/0
+      - POSTGRES_DSN=postgresql+asyncpg://paf:${POSTGRES_PASSWORD:-paf_secret}@postgres:5432/paf_db
+      - INFLUXDB_URL=http://influxdb:8086
+      - INFLUXDB_TOKEN=${INFLUXDB_TOKEN:-paf-influx-token}
+      - INFLUXDB_ORG=paf
+      - INFLUXDB_BUCKET_METRICS=metrics
+      - INFLUXDB_BUCKET_FORECAST=forecast
+      - MODEL_PATH=/app/models/
+      - API_KEY=${API_KEY:-dev-api-key-change-me}
+      - ADMIN_API_KEY=${ADMIN_API_KEY:-dev-admin-key-change-me}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - CONFIG_PATH=/app/config.yaml
+    volumes:
+      - ../config.yaml:/app/config.yaml:ro
+      - ../models:/app/models:ro
+      - ../scenarios:/app/scenarios:ro
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      influxdb:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 4G
+    networks:
+      - paf_network
+    restart: unless-stopped
+
+  # ========================================================================
+  # SIMULATED SERVER NODES (S1–S4)
+  # ========================================================================
+  node_s1:
+    build:
+      context: ..
+      dockerfile: infra/Dockerfile.node
+    container_name: paf_node_s1
+    ports:
+      - "50051:50051"    # gRPC
+      - "9101:9100"      # Prometheus metrics
+    environment:
+      - NODE_NAME=node_s1
+      - NODE_GRPC_PORT=50051
+      - NODE_METRICS_PORT=9100
+      - CAPACITY_SCORE=100
+      - CPU_CORES=4
+      - MEMORY_GB=8
+      - COORDINATOR_ADDRESS=coordinator:50050
+      - CONFIG_PATH=/app/config.yaml
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+    volumes:
+      - ../config.yaml:/app/config.yaml:ro
+    depends_on:
+      coordinator:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:9100/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 1G
+    networks:
+      - paf_network
+    restart: unless-stopped
+
+  node_s2:
+    build:
+      context: ..
+      dockerfile: infra/Dockerfile.node
+    container_name: paf_node_s2
+    ports:
+      - "50052:50052"
+      - "9102:9100"
+    environment:
+      - NODE_NAME=node_s2
+      - NODE_GRPC_PORT=50052
+      - NODE_METRICS_PORT=9100
+      - CAPACITY_SCORE=70
+      - CPU_CORES=2
+      - MEMORY_GB=4
+      - COORDINATOR_ADDRESS=coordinator:50050
+      - CONFIG_PATH=/app/config.yaml
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+    volumes:
+      - ../config.yaml:/app/config.yaml:ro
+    depends_on:
+      coordinator:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:9100/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 1G
+    networks:
+      - paf_network
+    restart: unless-stopped
+
+  node_s3:
+    build:
+      context: ..
+      dockerfile: infra/Dockerfile.node
+    container_name: paf_node_s3
+    ports:
+      - "50053:50053"
+      - "9103:9100"
+    environment:
+      - NODE_NAME=node_s3
+      - NODE_GRPC_PORT=50053
+      - NODE_METRICS_PORT=9100
+      - CAPACITY_SCORE=150
+      - CPU_CORES=8
+      - MEMORY_GB=16
+      - COORDINATOR_ADDRESS=coordinator:50050
+      - CONFIG_PATH=/app/config.yaml
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+    volumes:
+      - ../config.yaml:/app/config.yaml:ro
+    depends_on:
+      coordinator:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:9100/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 1G
+    networks:
+      - paf_network
+    restart: unless-stopped
+
+  node_s4:
+    build:
+      context: ..
+      dockerfile: infra/Dockerfile.node
+    container_name: paf_node_s4
+    ports:
+      - "50054:50054"
+      - "9104:9100"
+    environment:
+      - NODE_NAME=node_s4
+      - NODE_GRPC_PORT=50054
+      - NODE_METRICS_PORT=9100
+      - CAPACITY_SCORE=90
+      - CPU_CORES=3
+      - MEMORY_GB=6
+      - COORDINATOR_ADDRESS=coordinator:50050
+      - CONFIG_PATH=/app/config.yaml
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+    volumes:
+      - ../config.yaml:/app/config.yaml:ro
+    depends_on:
+      coordinator:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:9100/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 1G
+    networks:
+      - paf_network
+    restart: unless-stopped
+
+  # ========================================================================
+  # REDIS — Ring state + live metrics cache
+  # ========================================================================
+  redis:
+    image: redis:7-alpine
+    container_name: paf_redis
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    command: >
+      redis-server
+      --appendonly yes
+      --appendfsync everysec
+      --maxmemory 256mb
+      --maxmemory-policy allkeys-lru
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+    networks:
+      - paf_network
+    restart: unless-stopped
+
+  # ========================================================================
+  # POSTGRESQL — Request logs, experiments, predictions
+  # ========================================================================
+  postgres:
+    image: postgres:15-alpine
+    container_name: paf_postgres
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    environment:
+      - POSTGRES_DB=paf_db
+      - POSTGRES_USER=paf
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-paf_secret}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ../db/schema.sql:/docker-entrypoint-initdb.d/01_schema.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U paf -d paf_db"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 2G
+    networks:
+      - paf_network
+    restart: unless-stopped
+
+  # ========================================================================
+  # INFLUXDB — Time-series metrics
+  # ========================================================================
+  influxdb:
+    image: influxdb:2.7-alpine
+    container_name: paf_influxdb
+    ports:
+      - "${INFLUXDB_PORT:-8086}:8086"
+    environment:
+      - DOCKER_INFLUXDB_INIT_MODE=setup
+      - DOCKER_INFLUXDB_INIT_USERNAME=paf_admin
+      - DOCKER_INFLUXDB_INIT_PASSWORD=${INFLUXDB_PASSWORD:-paf_influx_secret}
+      - DOCKER_INFLUXDB_INIT_ORG=paf
+      - DOCKER_INFLUXDB_INIT_BUCKET=metrics
+      - DOCKER_INFLUXDB_INIT_RETENTION=720h
+      - DOCKER_INFLUXDB_INIT_ADMIN_TOKEN=${INFLUXDB_TOKEN:-paf-influx-token}
+    volumes:
+      - influxdb_data:/var/lib/influxdb2
+      - ../infra/influxdb/setup.sh:/docker-entrypoint-initdb.d/setup.sh:ro
+    healthcheck:
+      test: ["CMD", "influx", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 2G
+    networks:
+      - paf_network
+    restart: unless-stopped
+
+  # ========================================================================
+  # PROMETHEUS — Metrics scraper
+  # ========================================================================
+  prometheus:
+    image: prom/prometheus:v2.50.0
+    container_name: paf_prometheus
+    ports:
+      - "${PROMETHEUS_PORT:-9090}:9090"
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--storage.tsdb.retention.time=7d'
+      - '--web.enable-lifecycle'
+    volumes:
+      - ../infra/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ../infra/prometheus/alert_rules.yml:/etc/prometheus/alert_rules.yml:ro
+      - prometheus_data:/prometheus
+    depends_on:
+      coordinator:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 1G
+    networks:
+      - paf_network
+    restart: unless-stopped
+
+  # ========================================================================
+  # GRAFANA — Dashboards
+  # ========================================================================
+  grafana:
+    image: grafana/grafana:10.3.1
+    container_name: paf_grafana
+    ports:
+      - "${GRAFANA_PORT:-3000}:3000"
+    environment:
+      - GF_SECURITY_ADMIN_USER=${GRAFANA_USER:-admin}
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_PASSWORD:-admin}
+      - GF_USERS_ALLOW_SIGN_UP=false
+      - GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH=/var/lib/grafana/dashboards/node_load_overview.json
+    volumes:
+      - ../infra/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ../infra/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana_data:/var/lib/grafana
+    depends_on:
+      - prometheus
+      - influxdb
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+    networks:
+      - paf_network
+    restart: unless-stopped
+
+  # ========================================================================
+  # TRAFFIC GENERATOR — Scenario-based request injector
+  # ========================================================================
+  traffic_generator:
+    build:
+      context: ..
+      dockerfile: infra/Dockerfile.traffic_generator
+    container_name: paf_traffic_generator
+    environment:
+      - COORDINATOR_URL=http://coordinator:8000/api/v1/request
+      - SCENARIO_FILE=/app/scenarios/${SCENARIO:-uniform.yaml}
+      - API_KEY=${API_KEY:-dev-api-key-change-me}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - CONFIG_PATH=/app/config.yaml
+    volumes:
+      - ../config.yaml:/app/config.yaml:ro
+      - ../scenarios:/app/scenarios:ro
+    depends_on:
+      coordinator:
+        condition: service_healthy
+      node_s1:
+        condition: service_healthy
+      node_s2:
+        condition: service_healthy
+      node_s3:
+        condition: service_healthy
+      node_s4:
+        condition: service_healthy
+    profiles:
+      - generate    # Only starts with: docker compose --profile generate up
+    networks:
+      - paf_network
+
+# ========================================================================
+# VOLUMES
+# ========================================================================
+volumes:
+  redis_data:
+    driver: local
+  postgres_data:
+    driver: local
+  influxdb_data:
+    driver: local
+  prometheus_data:
+    driver: local
+  grafana_data:
+    driver: local
+
+# ========================================================================
+# NETWORKS
+# ========================================================================
+networks:
+  paf_network:
+    driver: bridge
+    name: paf_network

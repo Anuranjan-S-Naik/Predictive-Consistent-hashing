@@ -1,0 +1,14 @@
+FROM python:3.11-slim
+
+WORKDIR /app
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN pip install --no-cache-dir aiohttp==3.9.3 pyyaml==6.0.1 pydantic==2.6.3
+
+COPY traffic_generator/ /app/traffic_generator/
+COPY config.yaml /app/config.yaml
+
+CMD ["python", "-m", "traffic_generator.generator"]

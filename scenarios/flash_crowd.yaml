@@ -1,0 +1,104 @@
+# ============================================================================
+# SCENARIO: Flash Crowd
+# ============================================================================
+# Simulates a sudden 10× surge in traffic (e.g., viral event, breaking news).
+# Tests system resilience under extreme load: queue saturation, rejection
+# rates, and recovery time after the surge subsides.
+# ============================================================================
+
+scenario:
+  name: "flash_crowd"
+  description: "Sudden 10× traffic surge for a sustained period, then return to baseline"
+  version: "1.0"
+
+traffic:
+  # Baseline requests per second (before and after surge)
+  rps: 200
+  # Total scenario duration in seconds
+  duration_seconds: 300
+  # Ramp-up period for initial baseline phase
+  ramp_up_seconds: 10
+
+  # Baseline class distribution
+  class_distribution:
+    light: 0.50
+    medium: 0.35
+    heavy: 0.15
+
+  # Arrival pattern: flash crowd surge
+  pattern:
+    type: "flash_crowd"
+    # When the surge begins (seconds from scenario start)
+    surge_start_sec: 60
+    # Duration of the surge (seconds)
+    surge_duration_sec: 30
+    # Multiplier applied during surge
+    surge_rps_multiplier: 10.0
+    # How quickly traffic ramps up at surge start (seconds for 0→peak)
+    surge_ramp_up_sec: 2
+    # How quickly traffic returns to baseline after surge (seconds)
+    surge_ramp_down_sec: 10
+    # Class distribution DURING surge (uniform — all types spike)
+    surge_class_distribution:
+      light: 0.45
+      medium: 0.35
+      heavy: 0.20
+    # Jitter on inter-arrival time
+    jitter_pct: 5
+
+  # Simulated endpoint distribution
+  endpoints:
+    - path: "/api/search"
+      method: "GET"
+      weight: 0.30
+      avg_payload_bytes: 256
+    - path: "/api/data"
+      method: "POST"
+      weight: 0.25
+      avg_payload_bytes: 4096
+    - path: "/api/inference"
+      method: "POST"
+      weight: 0.15
+      avg_payload_bytes: 16384
+    - path: "/api/status"
+      method: "GET"
+      weight: 0.20
+      avg_payload_bytes: 128
+    - path: "/api/batch"
+      method: "POST"
+      weight: 0.10
+      avg_payload_bytes: 65536
+
+  source_ids:
+    count: 200   # More unique clients during flash crowd
+    prefix: "user_"
+
+evaluation:
+  metrics:
+    - name: "latency_p50_ms"
+      description: "Median request latency"
+    - name: "latency_p95_ms"
+      description: "95th percentile request latency"
+    - name: "latency_p99_ms"
+      description: "99th percentile request latency"
+    - name: "throughput_rps"
+      description: "Sustained requests per second processed"
+    - name: "load_variance_stddev"
+      description: "Standard deviation of CPU% across all nodes"
+    - name: "failure_rate_pct"
+      description: "Percentage of requests rejected or timed out"
+    - name: "avg_cpu_utilization_pct"
+      description: "Average CPU utilization across all nodes"
+    - name: "avg_routing_hops"
+      description: "Average number of Chord routing hops per request"
+    - name: "peak_queue_depth"
+      description: "Maximum queue depth observed during surge"
+    - name: "rejection_count"
+      description: "Total 503 rejections during surge"
+    - name: "recovery_time_sec"
+      description: "Seconds from surge end until p99 returns to pre-surge level"
+
+  slo_thresholds:
+    latency_p99_ms: 5000         # Higher tolerance during extreme surge
+    failure_rate_pct: 10.0       # Allow up to 10% rejection under 10× load
+    load_variance_stddev: 35.0

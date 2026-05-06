@@ -1,0 +1,53 @@
+# ============================================================================
+# Prometheus Configuration — Predictive Adaptive Request Allocation Framework
+# ============================================================================
+
+global:
+  scrape_interval: 5s        # Scrape targets every 5 seconds
+  evaluation_interval: 5s    # Evaluate alerting rules every 5 seconds
+  scrape_timeout: 4s
+
+# Alerting rules
+rule_files:
+  - "alert_rules.yml"
+
+# Scrape targets
+scrape_configs:
+  # --- Coordinator ---
+  - job_name: 'coordinator'
+    metrics_path: '/metrics'
+    static_configs:
+      - targets: ['coordinator:8000']
+        labels:
+          service: 'coordinator'
+          role: 'coordinator'
+
+  # --- Server Nodes ---
+  - job_name: 'nodes'
+    metrics_path: '/metrics'
+    static_configs:
+      - targets: ['node_s1:9100']
+        labels:
+          service: 'node'
+          node: 'node_s1'
+          capacity: '100'
+      - targets: ['node_s2:9100']
+        labels:
+          service: 'node'
+          node: 'node_s2'
+          capacity: '70'
+      - targets: ['node_s3:9100']
+        labels:
+          service: 'node'
+          node: 'node_s3'
+          capacity: '150'
+      - targets: ['node_s4:9100']
+        labels:
+          service: 'node'
+          node: 'node_s4'
+          capacity: '90'
+
+  # --- Prometheus self-monitoring ---
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']

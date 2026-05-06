@@ -1,0 +1,182 @@
+// ============================================================================
+// Predictive Adaptive Request Allocation Framework
+// gRPC Service Definition — Coordinator ↔ Node Interface Contract
+// ============================================================================
+// This proto defines the complete RPC interface between the coordinator
+// process and all simulated server nodes. Both sides are generated from
+// this single source of truth.
+//
+// RPCs:
+//   1. RouteRequest    — Coordinator dispatches a classified request to a node
+//   2. ReportCompletion — Node reports back execution results to coordinator
+//   3. GetNodeMetrics   — Coordinator pulls live metrics from a node
+//   4. HealthCheck      — Coordinator pings node liveness
+// ============================================================================
+
+syntax = "proto3";
+
+package paf;
+
+option python_generic_services = true;
+
+// ============================================================================
+// Service Definition
+// ============================================================================
+
+service CoordinatorNodeService {
+  // Coordinator → Node: dispatch a classified request for execution
+  rpc RouteRequest (RouteRequestMsg) returns (RouteRequestResponse);
+
+  // Node → Coordinator: report completion of an executed request
+  rpc ReportCompletion (CompletionMsg) returns (CompletionResponse);
+
+  // Coordinator → Node: pull current live metrics
+  rpc GetNodeMetrics (NodeIdMsg) returns (NodeMetricsResponse);
+
+  // Coordinator → Node: health check ping
+  rpc HealthCheck (HealthCheckRequest) returns (HealthCheckResponse);
+}
+
+// ============================================================================
+// Message Definitions
+// ============================================================================
+
+// --- RouteRequest ---
+
+// Request classification label
+enum RequestClass {
+  REQUEST_CLASS_UNKNOWN = 0;
+  REQUEST_CLASS_LIGHT = 1;
+  REQUEST_CLASS_MEDIUM = 2;
+  REQUEST_CLASS_HEAVY = 3;
+}
+
+// Dispatched request from coordinator to a node
+message RouteRequestMsg {
+  // Unique request identifier (e.g., "req_00083921")
+  string request_id = 1;
+
+  // Classified request class
+  RequestClass request_class = 2;
+
+  // Classifier confidence score (0.0 – 1.0)
+  double confidence = 3;
+
+  // Original request metadata
+  string endpoint = 4;         // e.g., "/api/search"
+  string method = 5;           // e.g., "POST"
+  int32 payload_bytes = 6;     // Request body size in bytes
+  string source_id = 7;        // Client identifier (e.g., "user_42")
+
+  // Timing
+  int64 arrival_timestamp_ms = 8;  // Unix timestamp in milliseconds when request hit coordinator
+  int64 dispatch_timestamp_ms = 9; // Unix timestamp in milliseconds when dispatched to node
+
+  // Routing metadata
+  int32 routing_hops = 10;     // Number of Chord hops taken (1 = direct assignment)
+  string assigned_by = 11;     // "allocation_engine" or "chord_router"
+
+  // Feature vector (8 normalized floats) — for logging/debugging
+  repeated float feature_vector = 12;
+
+  // Experiment context (if running a benchmark)
+  string experiment_id = 13;
+}
+
+// Response from node after accepting the request into its queue
+message RouteRequestResponse {
+  bool accepted = 1;            // True if request was queued; false if queue full (503)
+  string node_id = 2;           // Node that accepted (e.g., "node_s1")
+  int32 current_queue_depth = 3; // Queue depth after insertion
+  string rejection_reason = 4;  // Non-empty if accepted=false (e.g., "queue_full")
+}
+
+// --- ReportCompletion ---
+
+// Node reports execution completion back to coordinator
+message CompletionMsg {
+  // Request that was completed
+  string request_id = 1;
+
+  // Node that executed the request
+  string node_id = 2;
+
+  // Execution results
+  RequestClass request_class = 3;
+  double execution_time_ms = 4;    // Actual simulated execution time
+  double queue_wait_time_ms = 5;   // Time spent waiting in WFQ queue
+  double total_time_ms = 6;        // queue_wait + execution
+
+  // Completion timestamp (Unix ms)
+  int64 completion_timestamp_ms = 7;
+
+  // Node state at completion
+  double cpu_pct = 8;
+  int32 queue_depth = 9;
+
+  // Success/failure
+  bool success = 10;
+  string error_message = 11;       // Non-empty if success=false
+
+  // Experiment context
+  string experiment_id = 12;
+}
+
+// Coordinator acknowledgement of completion report
+message CompletionResponse {
+  bool acknowledged = 1;
+}
+
+// --- GetNodeMetrics ---
+
+// Coordinator requests current metrics from a specific node
+message NodeIdMsg {
+  string node_id = 1;
+}
+
+// Node's current live metrics
+message NodeMetricsResponse {
+  string node_id = 1;
+
+  // Resource utilization
+  double cpu_pct = 2;              // Current simulated CPU percentage (0–100)
+  double memory_pct = 3;           // Current simulated memory percentage (0–100)
+
+  // Queue state
+  int32 queue_depth_light = 4;     // Current items in Light queue
+  int32 queue_depth_medium = 5;    // Current items in Medium queue
+  int32 queue_depth_heavy = 6;     // Current items in Heavy queue
+  int32 queue_depth_total = 7;     // Total across all queues
+
+  // Performance
+  double latency_ema_ms = 8;       // Exponential moving average of execution latency
+  double throughput_rps = 9;       // Requests per second (rolling 10s window)
+
+  // Capacity
+  int32 capacity_score = 10;       // Static capacity score from config
+  int32 vnode_count = 11;          // Current number of virtual nodes assigned
+
+  // Counters
+  int64 total_requests_processed = 12;
+  int64 total_requests_rejected = 13;
+
+  // Timestamp of this metrics snapshot (Unix ms)
+  int64 timestamp_ms = 14;
+
+  // Node health
+  bool is_healthy = 15;
+  int64 uptime_sec = 16;
+}
+
+// --- HealthCheck ---
+
+message HealthCheckRequest {
+  string sender_id = 1;           // Who is pinging (e.g., "coordinator")
+}
+
+message HealthCheckResponse {
+  string node_id = 1;
+  bool healthy = 2;
+  int64 uptime_sec = 3;
+  int64 timestamp_ms = 4;
+}

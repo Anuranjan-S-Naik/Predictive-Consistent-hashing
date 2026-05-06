@@ -1,0 +1,247 @@
+# ============================================================================
+# Predictive Adaptive Request Allocation Framework
+# Master Configuration File
+# ============================================================================
+# All services read this file. Changes require restart of affected services.
+# ============================================================================
+
+# --- Cluster Topology ---
+cluster:
+  nodes:
+    - name: "node_s1"
+      capacity_score: 100
+      grpc_address: "node_s1:50051"
+      cpu_cores: 4
+      memory_gb: 8
+    - name: "node_s2"
+      capacity_score: 70
+      grpc_address: "node_s2:50052"
+      cpu_cores: 2
+      memory_gb: 4
+    - name: "node_s3"
+      capacity_score: 150
+      grpc_address: "node_s3:50053"
+      cpu_cores: 8
+      memory_gb: 16
+    - name: "node_s4"
+      capacity_score: 90
+      grpc_address: "node_s4:50054"
+      cpu_cores: 3
+      memory_gb: 6
+
+# --- Coordinator Settings ---
+coordinator:
+  host: "0.0.0.0"
+  http_port: 8000
+  grpc_port: 50050
+  log_level: "INFO"
+
+# --- Hash Ring ---
+hash_ring:
+  # Hash function: MurmurHash3 128-bit via mmh3
+  algorithm: "murmurhash3_128"
+  # Base virtual nodes per node (before capacity scaling)
+  vnode_base_count: 150
+  # Minimum vnodes per active node (prevents starvation)
+  vnode_min_count: 10
+  # In-memory ring snapshot refresh interval (ms)
+  ring_cache_refresh_ms: 100
+
+# --- Dynamic Allocation Algorithm (DAA) ---
+daa:
+  # DAA recalculation interval (seconds)
+  interval_sec: 10
+  # Vnode adjustment formula:
+  #   vnode_count(node) ∝ available_cpu × (1 / (1 + queue_depth)) × burst_damping
+  thresholds:
+    cpu_increase_below: 50       # Increase vnodes when CPU% < this
+    queue_increase_below: 20     # Increase vnodes when queue% < this
+    cpu_decrease_above: 80       # Decrease vnodes when CPU% > this
+    queue_decrease_above: 80     # Decrease vnodes when queue% > this
+    cpu_alert_above: 90          # Alert threshold for sustained high CPU
+    cpu_alert_duration_sec: 30   # Sustained duration before alert fires
+  burst_damping_factor: 0.7      # Multiply vnodes by this for burst-target nodes
+
+# --- Allocation Scoring ---
+allocation:
+  # Score(node) = α·cpu + β·queue + γ·latency + δ·predicted_load
+  weights:
+    alpha_cpu: 0.35
+    beta_queue: 0.30
+    gamma_latency: 0.20
+    delta_forecast: 0.15
+  # Score threshold above which Chord router is invoked
+  overflow_threshold: 0.85
+  # Metrics staleness penalty: added per second of age
+  staleness_penalty_per_sec: 0.1
+  # Tie-breaking: prefer lower node physical ID
+  tie_break: "lowest_node_id"
+
+# --- Chord DHT Router ---
+chord:
+  # Maximum routing hops before fallback to least-connections
+  max_hops: 4
+  # Fallback strategy when max hops exceeded
+  fallback_strategy: "least_connections"
+  # Finger table rebuild interval (seconds)
+  finger_table_refresh_sec: 30
+
+# --- WFQ Scheduler (per node) ---
+scheduler:
+  queues:
+    light:
+      weight: 3
+      max_depth: 200
+      execution_time_ms:
+        min: 40
+        max: 60
+    medium:
+      weight: 2
+      max_depth: 150
+      execution_time_ms:
+        min: 150
+        max: 250
+    heavy:
+      weight: 1
+      max_depth: 100
+      execution_time_ms:
+        min: 800
+        max: 1200
+
+# --- ML Models ---
+ml:
+  classifier:
+    model_path: "models/classifier_v1.joblib"
+    # Confidence below this → fallback to Medium
+    confidence_threshold: 0.55
+    # Inference timeout (ms)
+    inference_timeout_ms: 5
+  forecaster:
+    model_path: "models/forecaster_v1.pt"
+    # GRU architecture
+    input_size: 1
+    hidden_size: 64
+    num_layers: 2
+    # Inference interval (seconds)
+    inference_interval_sec: 5
+    # Rolling window size (data points)
+    window_size: 60
+    # Burst detection: predicted > multiplier × current_avg
+    burst_multiplier: 1.5
+    # Forecast considered stale after this many seconds
+    stale_after_sec: 30
+    # Warm-up: use EMA if fewer than this many data points available
+    warmup_min_points: 60
+
+# --- Feature Pipeline ---
+features:
+  # 8-dimensional feature vector
+  vector_size: 8
+  # Sliding window for request counting (seconds)
+  window_duration_sec: 5
+  # EMA smoothing factor for latency
+  ema_alpha: 0.3
+  # Normalization bounds
+  normalization:
+    payload_bytes_max: 131072
+    requests_per_window_max: 200
+    latency_ema_max_ms: 5000
+    queue_depth_max: 500
+  # Endpoint ID lookup table
+  endpoint_ids:
+    "/api/search": 0
+    "/api/data": 1
+    "/api/inference": 2
+    "/api/status": 3
+    "/api/batch": 4
+    _default: 0
+
+# --- Ground-Truth Class Labeling ---
+class_labels:
+  light_max_ms: 100         # < 100 ms → Light
+  medium_max_ms: 500        # 100–500 ms → Medium
+  # > 500 ms → Heavy
+
+# --- Feedback & Self-Optimization ---
+feedback:
+  # Feedback loop execution interval (seconds)
+  interval_sec: 60
+  # Load variance threshold to trigger immediate DAA recalculation
+  variance_threshold: 20.0
+  # Drift detection: classifier accuracy threshold
+  drift_accuracy_threshold: 0.80
+  # Rolling window for drift detection (number of predictions)
+  drift_window_size: 1000
+
+# --- Data Stores ---
+datastores:
+  redis:
+    url: "redis://redis:6379/0"
+    # AOF persistence enabled (configured in Redis container)
+    ring_key: "ring:vnodes"
+    metrics_key_prefix: "metrics:"
+    forecast_key: "forecast:latest"
+    metrics_ttl_sec: 10
+    forecast_ttl_sec: 15
+  postgresql:
+    dsn: "postgresql+asyncpg://paf:paf_secret@postgres:5432/paf_db"
+    # Batch insert configuration
+    batch_size: 1000
+    batch_interval_sec: 1
+  influxdb:
+    url: "http://influxdb:8086"
+    org: "paf"
+    bucket_metrics: "metrics"
+    bucket_forecast: "forecast"
+    retention_metrics_days: 30
+    retention_forecast_days: 7
+    batch_write_interval_sec: 10
+
+# --- Monitoring ---
+monitoring:
+  prometheus:
+    port: 9090
+    scrape_interval_sec: 5
+  grafana:
+    port: 3000
+  alerting:
+    # Alert if any node CPU > 90% for > 30 seconds
+    node_cpu_alert_threshold: 90
+    node_cpu_alert_duration_sec: 30
+
+# --- Authentication ---
+auth:
+  # External intake endpoint: static API key
+  api_key_header: "X-API-Key"
+  # Admin endpoints: separate key, rate-limited
+  admin_rate_limit_per_min: 10
+  # gRPC: mTLS between coordinator and nodes
+  grpc_tls:
+    enabled: false     # Set true for production; self-signed certs in Docker
+    cert_path: "certs/server.crt"
+    key_path: "certs/server.key"
+    ca_path: "certs/ca.crt"
+
+# --- Traffic Generator ---
+traffic_generator:
+  # Default scenario file
+  default_scenario: "scenarios/uniform.yaml"
+  # Coordinator endpoint
+  coordinator_url: "http://coordinator:8000/api/v1/request"
+  # Connection pool size
+  max_connections: 100
+  # Request timeout (seconds)
+  request_timeout_sec: 30
+
+# --- Experiment Runner ---
+experiments:
+  # Baseline modes to compare against
+  baseline_modes:
+    - "round_robin"
+    - "least_connections"
+    - "static_consistent_hash"
+    - "predictive_framework"
+  # Default experiment duration (seconds)
+  default_duration_sec: 300
+  # Output file for comparison results
+  results_file: "results_summary.csv"

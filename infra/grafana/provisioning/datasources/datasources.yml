@@ -1,0 +1,24 @@
+# Grafana datasource provisioning
+apiVersion: 1
+
+datasources:
+  - name: Prometheus
+    type: prometheus
+    access: proxy
+    url: http://prometheus:9090
+    isDefault: true
+    editable: false
+    jsonData:
+      timeInterval: '5s'
+
+  - name: InfluxDB
+    type: influxdb
+    access: proxy
+    url: http://influxdb:8086
+    editable: false
+    jsonData:
+      version: Flux
+      organization: paf
+      defaultBucket: metrics
+    secureJsonData:
+      token: ${INFLUXDB_TOKEN:-paf-influx-token}
