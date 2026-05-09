@@ -31,6 +31,14 @@ from coordinator.db.postgres_writer import PostgresBatchWriter, RequestRecord, P
 from coordinator.db.redis_cache import RedisRingCache, RedisMetricsCache
 from coordinator.db.influxdb_client import InfluxDBClient
 
+# DAA + Feedback imports
+from coordinator.routing.daa import DynamicAdaptiveAllocator
+from coordinator.feedback.optimizer import FeedbackOptimizer
+
+# Phase 5: ML imports
+from coordinator.ml.classifier import RequestClassifier
+from coordinator.ml.forecaster import TrafficForecaster
+
 import grpc
 import yaml
 from fastapi import FastAPI, Request, Response, HTTPException, Security, Depends
@@ -77,7 +85,7 @@ def load_config(path: str) -> dict:
 # ---------------------------------------------------------------------------
 
 REQUEST_COUNT = Counter(
-    "paf_requests_total",
+    "paf_coordinator_requests_total",
     "Total requests received by coordinator",
     ["method", "endpoint", "status"],
 )
@@ -188,6 +196,14 @@ redis_ring_cache: Optional[RedisRingCache] = None
 redis_metrics_cache: Optional[RedisMetricsCache] = None
 influxdb_client: Optional[InfluxDBClient] = None
 
+# DAA + Feedback (initialized at startup)
+daa_engine: Optional[DynamicAdaptiveAllocator] = None
+feedback_optimizer: Optional[FeedbackOptimizer] = None
+
+# Phase 5: ML components (initialized at startup)
+ml_classifier: Optional[RequestClassifier] = None
+ml_forecaster: Optional[TrafficForecaster] = None
+
 # ---------------------------------------------------------------------------
 # Lifespan (startup / shutdown)
 # ---------------------------------------------------------------------------
@@ -197,6 +213,9 @@ influxdb_client: Optional[InfluxDBClient] = None
 async def lifespan(app: FastAPI):
     """Application lifespan: initialize resources on startup, cleanup on shutdown."""
     global app_config, hash_ring, allocation_engine, chord_router, feature_pipeline, request_router
+    global postgres_writer, redis_ring_cache, redis_metrics_cache, influxdb_client
+    global daa_engine, feedback_optimizer
+    global ml_classifier, ml_forecaster
 
     # --- Startup ---
     logger.info("=" * 60)
@@ -245,13 +264,22 @@ async def lifespan(app: FastAPI):
 
     feature_pipeline = FeaturePipeline(config=app_config)
 
+    # --- Phase 5: Initialize ML components ---
+    ml_classifier = RequestClassifier(config=app_config)
+    classifier_ok = ml_classifier.load()
+    if classifier_ok:
+        logger.info("Phase 5: XGBoost classifier loaded successfully")
+    else:
+        logger.warning("Phase 5: Classifier not available, using heuristic fallback")
+
     request_router = RequestRouter(
         hash_ring=hash_ring,
         allocation_engine=allocation_engine,
         chord_router=chord_router,
         feature_pipeline=feature_pipeline,
+        classifier=ml_classifier,
     )
-    logger.info("Phase 3 pipeline initialized: FeaturePipeline → AllocationEngine → ChordRouter")
+    logger.info("Phase 3+5 pipeline initialized: FeaturePipeline → Classifier → AllocationEngine → ChordRouter")
 
     # --- Phase 4: Initialize datastore clients ---
     ds_cfg = app_config.get("datastores", {})
@@ -290,12 +318,53 @@ async def lifespan(app: FastAPI):
 
     logger.info("Phase 4 datastores initialized: PostgreSQL batch writer, Redis caches, InfluxDB")
 
+    # --- DAA + Feedback: Initialize ---
+    daa_engine = DynamicAdaptiveAllocator(
+        hash_ring=hash_ring,
+        allocation_engine=allocation_engine,
+        config=app_config,
+    )
+    await daa_engine.start()
+
+    feedback_optimizer = FeedbackOptimizer(
+        allocation_engine=allocation_engine,
+        daa=daa_engine,
+        config=app_config,
+    )
+    await feedback_optimizer.start()
+
+    logger.info("DAA + Feedback optimizer initialized")
+
+    # --- Phase 5: Initialize forecaster (after DAA so it can notify it) ---
+    ml_forecaster = TrafficForecaster(
+        config=app_config,
+        daa_engine=daa_engine,
+        redis_client=redis_ring_cache,
+        influxdb_client=influxdb_client,
+    )
+    forecaster_ok = ml_forecaster.load()
+    if forecaster_ok:
+        logger.info("Phase 5: GRU forecaster loaded successfully")
+    else:
+        logger.warning("Phase 5: Forecaster not available, using EMA fallback")
+    await ml_forecaster.start()
+
+    # Wire forecaster into the request router
+    request_router.forecaster = ml_forecaster
+
+    logger.info("Phase 5 ML pipeline fully initialized")
     logger.info(f"Coordinator ready on {COORDINATOR_HOST}:{COORDINATOR_PORT}")
 
     yield  # Application is running
 
     # --- Shutdown ---
     logger.info("Coordinator shutting down...")
+    if ml_forecaster:
+        await ml_forecaster.stop()
+    if daa_engine:
+        await daa_engine.stop()
+    if feedback_optimizer:
+        await feedback_optimizer.stop()
     if postgres_writer:
         await postgres_writer.stop()
     if redis_ring_cache:
@@ -317,6 +386,20 @@ app = FastAPI(
     description="Predictive Adaptive Request Allocation Framework — Coordinator API",
     version="0.1.0",
     lifespan=lifespan,
+)
+
+# ---------------------------------------------------------------------------
+# CORS Middleware — allow frontend to reach the API
+# ---------------------------------------------------------------------------
+
+from fastapi.middleware.cors import CORSMiddleware
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 # ---------------------------------------------------------------------------
@@ -505,6 +588,114 @@ async def get_forecast():
     }
 
 
+@app.get("/api/v1/daa", tags=["system"])
+async def get_daa_status():
+    """Return current DAA (Dynamic Adaptive Allocation) status.
+
+    Shows vnode adjustment history, per-node factors, and burst state.
+    """
+    if daa_engine:
+        return daa_engine.get_status()
+    return {"running": False, "message": "DAA not initialized"}
+
+
+@app.get("/api/v1/allocation", tags=["system"])
+async def get_allocation_status():
+    """Return live allocation engine weights, per-node scores, and class stats."""
+    weights = {
+        "alpha_cpu": allocation_engine.alpha,
+        "beta_queue": allocation_engine.beta,
+        "gamma_latency": allocation_engine.gamma,
+        "delta_forecast": allocation_engine.delta,
+        "overflow_threshold": allocation_engine.overflow_threshold,
+    }
+    scores = allocation_engine.get_all_scores()
+    node_metrics = allocation_engine.get_all_metrics()
+
+    # Read request class counts from Prometheus counters
+    class_counts = {}
+    try:
+        for cls in ["Light", "Medium", "Heavy"]:
+            sample = REQUESTS_CLASSIFIED.labels(**{"class": cls})
+            class_counts[cls] = sample._value.get()
+    except Exception:
+        class_counts = {"Light": 0, "Medium": 0, "Heavy": 0}
+
+    total_classified = sum(class_counts.values()) or 1
+    class_distribution = {
+        cls: round((count / total_classified) * 100, 1)
+        for cls, count in class_counts.items()
+    }
+
+    return {
+        "weights": weights,
+        "scores": {k: round(v, 4) for k, v in scores.items()},
+        "node_metrics": node_metrics,
+        "class_counts": class_counts,
+        "class_distribution": class_distribution,
+    }
+
+
+
+@app.get("/api/v1/feedback", tags=["system"])
+async def get_feedback_status():
+    """Return feedback optimizer status.
+
+    Shows load variance, CPU alerts, and recent corrective actions.
+    """
+    if feedback_optimizer:
+        return feedback_optimizer.get_status()
+    return {"running": False, "message": "Feedback optimizer not initialized"}
+
+
+@app.get("/api/v1/forecast", tags=["ml"])
+async def get_forecast_status():
+    """Return live traffic forecaster status.
+
+    Shows model info, last prediction, burst state, and window fill.
+    """
+    if ml_forecaster:
+        return ml_forecaster.get_status()
+    return {"running": False, "message": "Forecaster not initialized"}
+
+
+@app.get("/api/v1/classifier", tags=["ml"])
+async def get_classifier_status():
+    """Return ML classifier status.
+
+    Shows model info, prediction counts, inference latency, and fallback rate.
+    """
+    if ml_classifier:
+        return ml_classifier.get_stats()
+    return {"loaded": False, "message": "Classifier not initialized"}
+
+
+
+@app.get("/api/v1/nodes/{node_id}", tags=["cluster"])
+async def get_node_detail(node_id: str):
+    """Get detailed metrics for a specific node."""
+    nodes = app_config.get("cluster", {}).get("nodes", [])
+    node_cfg = next((n for n in nodes if n["name"] == node_id), None)
+    if not node_cfg:
+        raise HTTPException(status_code=404, detail=f"Node {node_id} not found")
+
+    metrics = allocation_engine.get_node_metrics(node_id)
+    score = allocation_engine.compute_score(node_id)
+    vnode_count = hash_ring.get_vnode_count(node_id)
+
+    return {
+        "node_id": node_id,
+        "capacity_score": node_cfg.get("capacity_score"),
+        "cpu_cores": node_cfg.get("cpu_cores"),
+        "memory_gb": node_cfg.get("memory_gb"),
+        "grpc_address": node_cfg.get("grpc_address"),
+        "grpc_connected": grpc_pool.get_channel(node_id) is not None,
+        "vnode_count": vnode_count,
+        "allocation_score": round(score, 4),
+        "metrics": metrics,
+    }
+
+
 @app.post("/api/v1/admin/retrain", tags=["admin"], status_code=501)
 async def trigger_retrain(_key: str = Depends(verify_admin_key)):
     """Trigger manual model retraining.
@@ -526,9 +717,10 @@ if __name__ == "__main__":
     import uvicorn
 
     uvicorn.run(
-        "coordinator.main:app",
+        app,
         host=COORDINATOR_HOST,
         port=COORDINATOR_PORT,
         log_level=LOG_LEVEL.lower(),
         reload=False,
     )
+

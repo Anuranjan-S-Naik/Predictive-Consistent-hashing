@@ -2,47 +2,32 @@
 
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
+import { useEffect, useState, useCallback } from 'react';
 import { cn } from '@/lib/utils';
 import {
-  LayoutDashboard, Server, Radio, Route, GitBranch, Layers,
-  BarChart3, Activity, AlertTriangle, FileText, Settings,
-  Zap, Gauge, FlaskConical, TrendingUp, Wifi, WifiOff,
+  LayoutDashboard, Server, Route, Radio,
+  GitBranch, Settings, Wifi, WifiOff,
 } from 'lucide-react';
-import { useWsStore } from '@/stores';
+import { API_BASE_URL } from '@/constants';
 
 const NAV_SECTIONS = [
   {
     title: 'Overview',
     items: [
       { href: '/', icon: LayoutDashboard, label: 'Dashboard' },
-      { href: '/simulation', icon: Radio, label: 'Simulation' },
     ],
   },
   {
     title: 'Infrastructure',
     items: [
       { href: '/nodes', icon: Server, label: 'Nodes' },
-      { href: '/traffic', icon: Zap, label: 'Traffic' },
       { href: '/routing', icon: Route, label: 'Routing' },
-      { href: '/routing/chord', icon: GitBranch, label: 'Chord DHT' },
-      { href: '/routing/queues', icon: Layers, label: 'WFQ Queues' },
+      { href: '/simulation', icon: Radio, label: 'Simulation' },
     ],
   },
   {
-    title: 'Analytics',
+    title: 'Configuration',
     items: [
-      { href: '/metrics', icon: Gauge, label: 'Metrics' },
-      { href: '/forecasting', icon: TrendingUp, label: 'Forecasting' },
-      { href: '/benchmarks', icon: BarChart3, label: 'Benchmarks' },
-      { href: '/experiments', icon: FlaskConical, label: 'Experiments' },
-    ],
-  },
-  {
-    title: 'Operations',
-    items: [
-      { href: '/alerts', icon: AlertTriangle, label: 'Alerts' },
-      { href: '/logs', icon: FileText, label: 'Logs' },
-      { href: '/failures', icon: Activity, label: 'Failures' },
       { href: '/settings', icon: Settings, label: 'Settings' },
     ],
   },
@@ -50,7 +35,23 @@ const NAV_SECTIONS = [
 
 export function Sidebar() {
   const pathname = usePathname();
-  const connected = useWsStore((s) => s.connected);
+  const [connected, setConnected] = useState(false);
+
+  // Poll the backend /health endpoint to determine online/offline status
+  const checkHealth = useCallback(async () => {
+    try {
+      const res = await fetch(`${API_BASE_URL}/health`, { signal: AbortSignal.timeout(3000) });
+      setConnected(res.ok);
+    } catch {
+      setConnected(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    checkHealth();
+    const iv = setInterval(checkHealth, 5000);
+    return () => clearInterval(iv);
+  }, [checkHealth]);
 
   return (
     <aside className="fixed left-0 top-0 bottom-0 w-[260px] bg-surface-1/80 backdrop-blur-xl border-r border-white/[0.04] flex flex-col z-50">
@@ -106,7 +107,7 @@ export function Sidebar() {
           ) : (
             <>
               <WifiOff className="w-3.5 h-3.5 text-zinc-600" />
-              <span className="text-zinc-600 font-medium">Offline</span>
+              <span className="text-zinc-600 font-medium">Demo Mode</span>
             </>
           )}
           <span className="ml-auto text-zinc-700 font-mono text-[10px]">v0.1.0</span>

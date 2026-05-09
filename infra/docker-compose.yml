@@ -294,7 +294,6 @@ services:
       - DOCKER_INFLUXDB_INIT_ADMIN_TOKEN=${INFLUXDB_TOKEN:-paf-influx-token}
     volumes:
       - influxdb_data:/var/lib/influxdb2
-      - ../infra/influxdb/setup.sh:/docker-entrypoint-initdb.d/setup.sh:ro
     healthcheck:
       test: ["CMD", "influx", "ping"]
       interval: 10s

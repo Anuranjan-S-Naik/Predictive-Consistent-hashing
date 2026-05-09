@@ -1,12 +1,12 @@
 """
 Coordinator Intake Router — Request Endpoint
 ===============================================
-Wires the full Phase 3 request pipeline:
+Wires the full request pipeline:
   1. Receive HTTP POST /api/v1/request
   2. Extract features (FeaturePipeline)
-  3. Classify request (stub: use heuristic until Phase 5 ML)
+  3. Classify request (XGBoost ML classifier, with heuristic fallback)
   4. Hash ring lookup (ConsistentHashRing)
-  5. Score-based node selection (AllocationEngine)
+  5. Score-based node selection (AllocationEngine) with δ·predicted_load
   6. Chord overflow routing if needed (ChordRouter)
   7. Log to PostgreSQL (async batch)
   8. Return allocation result
@@ -14,14 +14,14 @@ Wires the full Phase 3 request pipeline:
 
 import logging
 import time
-import uuid
 from typing import Dict, Optional
 
 logger = logging.getLogger("coordinator.intake.router")
 
-# Heuristic classifier (Phase 3 — replaced by XGBoost in Phase 5)
+
+# Heuristic classifier (fallback when ML model is unavailable)
 def heuristic_classify(endpoint: str, payload_bytes: int, method: str) -> tuple:
-    """Simple rule-based classification for Phase 3 (no ML yet).
+    """Simple rule-based classification (fallback).
 
     Returns:
         Tuple of (class_label, confidence).
@@ -39,17 +39,28 @@ class RequestRouter:
 
     Components wired:
       - FeaturePipeline: extract 8-dim feature vector
-      - Classifier: predict class (heuristic in Phase 3, XGBoost in Phase 5)
+      - RequestClassifier: ML-based classification (Phase 5)
       - HashRing: consistent hash lookup for candidates
       - AllocationEngine: score-based node selection
       - ChordRouter: overflow multi-hop routing
+      - TrafficForecaster: predicted load for δ weight
     """
 
-    def __init__(self, hash_ring, allocation_engine, chord_router, feature_pipeline):
+    def __init__(
+        self,
+        hash_ring,
+        allocation_engine,
+        chord_router,
+        feature_pipeline,
+        classifier=None,
+        forecaster=None,
+    ):
         self.ring = hash_ring
         self.engine = allocation_engine
         self.chord = chord_router
         self.pipeline = feature_pipeline
+        self.classifier = classifier
+        self.forecaster = forecaster
 
         # Request counter for ID generation
         self._counter = 0
@@ -83,8 +94,17 @@ class RequestRouter:
             queue_depth=0,  # Will be populated from live metrics
         )
 
-        # Step 2: Classification (heuristic for Phase 3)
-        predicted_class, confidence = heuristic_classify(endpoint, payload_bytes, method)
+        # Step 2: Classification — ML if available, else heuristic
+        if self.classifier and self.classifier.is_loaded:
+            predicted_class, confidence = self.classifier.classify(feature_vector)
+            classification_method = "xgboost"
+        else:
+            predicted_class, confidence = heuristic_classify(endpoint, payload_bytes, method)
+            classification_method = "heuristic"
+
+        # Notify forecaster of heavy requests
+        if predicted_class == "Heavy" and self.forecaster:
+            self.forecaster.record_heavy_request()
 
         # Step 3: Hash ring lookup
         primary_node = self.ring.get_node(request_id)
@@ -97,14 +117,25 @@ class RequestRouter:
                 "status": "rejected",
             }
 
-        # Step 4: Score-based selection
-        selected_node, score, all_overloaded = self.engine.select_node(candidates)
+        # Step 4: Build predicted loads from forecaster for δ weight
+        predicted_loads = {}
+        if self.forecaster:
+            node_count = len(self.ring.nodes) if hasattr(self.ring, 'nodes') else 4
+            for candidate in candidates:
+                predicted_loads[candidate] = self.forecaster.get_predicted_load(
+                    candidate, total_nodes=node_count
+                )
+
+        # Step 5: Score-based selection (now with δ·predicted_load)
+        selected_node, score, all_overloaded = self.engine.select_node(
+            candidates, predicted_loads=predicted_loads
+        )
         routing_hops = 1
         routing_method = "allocation_engine"
 
-        # Step 5: Chord overflow routing if all overloaded
+        # Step 6: Chord overflow routing if all overloaded
         if all_overloaded:
-            all_scores = self.engine.get_all_scores()
+            all_scores = self.engine.get_all_scores(predicted_loads=predicted_loads)
             chord_node, hops, method_used = self.chord.route(
                 overloaded_node=selected_node,
                 node_scores=all_scores,
@@ -120,11 +151,13 @@ class RequestRouter:
             "request_id": request_id,
             "predicted_class": predicted_class,
             "confidence": confidence,
+            "classification_method": classification_method,
             "assigned_node": selected_node,
             "routing_hops": routing_hops,
             "allocation_score": round(score, 4),
             "routing_method": routing_method,
             "feature_vector": [round(f, 4) for f in feature_vector],
+            "predicted_load": predicted_loads.get(selected_node, 0.0),
             "pipeline_latency_ms": round(elapsed_ms, 3),
             "status": "routed",
         }

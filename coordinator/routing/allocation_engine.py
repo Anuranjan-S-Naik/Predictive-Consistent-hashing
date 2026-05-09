@@ -159,3 +159,24 @@ class AllocationEngine:
     def remove_node(self, node_name: str):
         """Remove a node from the metrics cache."""
         self._node_metrics.pop(node_name, None)
+
+    def get_node_metrics(self, node_name: str) -> Dict:
+        """Get cached metrics for a single node.
+
+        Used by the DAA module for vnode adjustment decisions.
+
+        Returns:
+            Metrics dict, or empty dict if node unknown.
+        """
+        return dict(self._node_metrics.get(node_name, {}))
+
+    def get_all_metrics(self) -> Dict[str, Dict]:
+        """Get cached metrics for all known nodes.
+
+        Used by the feedback optimizer for load variance calculation.
+
+        Returns:
+            Dict of node_name -> metrics dict.
+        """
+        return {name: dict(m) for name, m in self._node_metrics.items()}
+
