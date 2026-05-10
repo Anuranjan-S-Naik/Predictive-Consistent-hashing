@@ -26,9 +26,9 @@ env/
 docker-compose.override.yml
 
 # ML Models (large files — track with Git LFS if needed)
-models/*.joblib
-models/*.pt
-models/*.pkl
+# models/*.joblib
+# models/*.pt
+# models/*.pkl
 !models/.gitkeep
 
 # Data
