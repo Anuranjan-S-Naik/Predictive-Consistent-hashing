@@ -88,39 +88,39 @@ const API_HEADERS = {
   'Content-Type': 'application/json',
 };
 
-// Enrich backend node data with simulated live metrics
-function enrichNode(node: BackendNode, tick: number): DisplayNode {
+// Map backend node data to display structure
+function enrichNode(node: BackendNode, metrics: any = {}): DisplayNode {
   const cap = node.capacity_score || 100;
   return {
     node_id: node.name,
     capacity_score: cap,
-    cpu_pct: 15 + Math.random() * 55 + Math.sin(tick * 0.1) * 10,
-    memory_pct: 20 + Math.random() * 30,
-    queue_depth_light: Math.floor(Math.random() * 80),
-    queue_depth_medium: Math.floor(Math.random() * 60),
-    queue_depth_heavy: Math.floor(Math.random() * 30),
-    latency_ema_ms: 50 + Math.random() * 200,
-    throughput_rps: 80 + Math.random() * 150,
-    vnode_count: Math.floor(cap * 1.5),
-    total_requests_processed: Math.floor(10000 + Math.random() * 50000),
+    cpu_pct: metrics.cpu_pct || 0,
+    memory_pct: metrics.memory_pct || 0,
+    queue_depth_light: metrics.queue_depth_light || 0,
+    queue_depth_medium: metrics.queue_depth_medium || 0,
+    queue_depth_heavy: metrics.queue_depth_heavy || 0,
+    latency_ema_ms: metrics.latency_ema_ms || 0,
+    throughput_rps: metrics.throughput_rps || 0,
+    vnode_count: node.vnode_count || 0,
+    total_requests_processed: metrics.total_requests_processed || 0,
     is_healthy: node.grpc_connected,
   };
 }
 
-function generateMockNode(name: string, cap: number, tick: number): DisplayNode {
+function generateMockNode(name: string, cap: number): DisplayNode {
   return {
     node_id: name,
     capacity_score: cap,
-    cpu_pct: 15 + Math.random() * 55 + Math.sin(tick * 0.1) * 10,
-    memory_pct: 20 + Math.random() * 30,
-    queue_depth_light: Math.floor(Math.random() * 80),
-    queue_depth_medium: Math.floor(Math.random() * 60),
-    queue_depth_heavy: Math.floor(Math.random() * 30),
-    latency_ema_ms: 50 + Math.random() * 200,
-    throughput_rps: 80 + Math.random() * 150,
-    vnode_count: Math.floor(cap * 1.5),
-    total_requests_processed: Math.floor(10000 + Math.random() * 50000),
-    is_healthy: Math.random() > 0.05,
+    cpu_pct: 0,
+    memory_pct: 0,
+    queue_depth_light: 0,
+    queue_depth_medium: 0,
+    queue_depth_heavy: 0,
+    latency_ema_ms: 0,
+    throughput_rps: 0,
+    vnode_count: 0,
+    total_requests_processed: 0,
+    is_healthy: false,
   };
 }
 
@@ -143,15 +143,30 @@ function useDashboardData() {
     tickRef.current += 1;
     const opts = { headers: API_HEADERS, signal: AbortSignal.timeout(4000) };
 
-    // Fetch nodes
     let live = false;
+    let allocData: any = null;
+
+    // Fetch allocation first to get node_metrics
+    try {
+      const resAlloc = await fetch(`${API_BASE_URL}/api/v1/allocation`, opts);
+      if (resAlloc.ok) {
+        allocData = await resAlloc.json();
+        setAllocation(allocData);
+        live = true;
+      }
+    } catch { /* ignore */ }
+
+    // Fetch nodes and enrich with real metrics
     try {
       const res = await fetch(`${API_BASE_URL}/api/v1/nodes`, opts);
       if (res.ok) {
         const data = await res.json();
         const backendNodes: BackendNode[] = data.nodes || [];
         if (backendNodes.length > 0) {
-          setNodes(backendNodes.map(n => enrichNode(n, tickRef.current)));
+          setNodes(backendNodes.map(n => {
+            const metrics = allocData?.node_metrics?.[n.name] || {};
+            return enrichNode(n, metrics);
+          }));
           live = true;
         }
       }
@@ -159,21 +174,15 @@ function useDashboardData() {
 
     if (!live) {
       setNodes([
-        generateMockNode('node_s1', 100, tickRef.current),
-        generateMockNode('node_s2', 70, tickRef.current),
-        generateMockNode('node_s3', 150, tickRef.current),
-        generateMockNode('node_s4', 90, tickRef.current),
+        generateMockNode('node_s1', 100),
+        generateMockNode('node_s2', 70),
+        generateMockNode('node_s3', 150),
+        generateMockNode('node_s4', 90),
       ]);
     }
     setIsLive(live);
 
     if (!live) return; // Don't fetch other endpoints if backend is down
-
-    // Fetch allocation engine (weights + class distribution)
-    try {
-      const res = await fetch(`${API_BASE_URL}/api/v1/allocation`, opts);
-      if (res.ok) setAllocation(await res.json());
-    } catch { /* ignore */ }
 
     // Fetch datastore health
     try {

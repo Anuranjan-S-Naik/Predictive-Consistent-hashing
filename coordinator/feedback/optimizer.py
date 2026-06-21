@@ -51,12 +51,14 @@ class FeedbackOptimizer:
     detects sustained CPU alerts, and triggers DAA when needed.
     """
 
-    def __init__(self, allocation_engine, daa=None, config=None):
+    def __init__(self, allocation_engine, daa=None, config=None, classifier=None):
         self.allocation_engine = allocation_engine
         self.daa = daa
+        self.classifier = classifier  # For drift detection
         cfg = (config or {}).get("feedback", {})
         self.interval_sec = cfg.get("interval_sec", DEFAULT_INTERVAL_SEC)
         self.variance_threshold = cfg.get("variance_threshold", DEFAULT_VARIANCE_THRESHOLD)
+        self.drift_accuracy_threshold = cfg.get("drift_accuracy_threshold", 0.90)
 
         mon_cfg = (config or {}).get("monitoring", {}).get("alerting", {})
         self.cpu_alert_threshold = mon_cfg.get("node_cpu_alert_threshold", DEFAULT_CPU_ALERT_THRESHOLD)
@@ -73,6 +75,9 @@ class FeedbackOptimizer:
         # Track sustained CPU alerts: node_name → first_seen_time
         self._cpu_alert_start: Dict[str, float] = {}
         self._active_alerts: List[Dict] = []
+        # Drift state
+        self._drift_detected = False
+        self._last_drift_info: Dict = {}
 
     async def start(self):
         """Start the feedback optimizer background loop."""
@@ -167,14 +172,47 @@ class FeedbackOptimizer:
                 if self.daa:
                     self.daa.trigger_immediate(reason=f"variance={variance:.1f}")
 
-        # --- Drift detection stub ---
-        action = FeedbackAction(
-            timestamp=now, action_type="drift_stub",
-            trigger_metric="classifier_accuracy",
-            trigger_value=0.0, threshold_value=0.0,
-            details="Drift detection disabled — no classifier loaded (Phase 5)",
-        )
-        self._actions.append(action)
+        # --- Drift detection (real) ---
+        if self.classifier and hasattr(self.classifier, 'get_drift_info'):
+            drift_info = self.classifier.get_drift_info()
+            self._last_drift_info = drift_info
+            rolling_acc = drift_info.get("rolling_accuracy", 1.0)
+            max_psi = drift_info.get("max_psi", 0.0)
+            drift_detected = drift_info.get("drift_detected", False)
+
+            if drift_detected and not self._drift_detected:
+                # New drift event
+                drifted = ", ".join(drift_info.get("drifted_features", []))
+                action = FeedbackAction(
+                    timestamp=now, action_type="drift_alert",
+                    trigger_metric="psi",
+                    trigger_value=max_psi,
+                    threshold_value=0.20,
+                    details=f"Data drift detected in features: {drifted}",
+                )
+                self._actions.append(action)
+                logger.warning(
+                    f"DRIFT ALERT: PSI={max_psi:.4f} > 0.20 in [{drifted}]. "
+                    f"Rolling accuracy={rolling_acc:.4f}"
+                )
+
+            if rolling_acc < self.drift_accuracy_threshold:
+                action = FeedbackAction(
+                    timestamp=now, action_type="accuracy_alert",
+                    trigger_metric="rolling_accuracy",
+                    trigger_value=round(rolling_acc, 4),
+                    threshold_value=self.drift_accuracy_threshold,
+                    details=f"Rolling accuracy {rolling_acc:.4f} below threshold {self.drift_accuracy_threshold}",
+                )
+                self._actions.append(action)
+                logger.warning(
+                    f"ACCURACY ALERT: rolling_accuracy={rolling_acc:.4f} "
+                    f"< threshold={self.drift_accuracy_threshold}"
+                )
+
+            self._drift_detected = drift_detected
+        else:
+            self._last_drift_info = {}
 
         # Record check history
         self._history.append({
@@ -182,6 +220,7 @@ class FeedbackOptimizer:
             "variance": self._last_variance,
             "node_count": len(all_metrics),
             "alerts_active": len(self._active_alerts),
+            "drift_detected": self._drift_detected,
         })
 
         # Trim old alerts (keep last 50)
@@ -202,4 +241,6 @@ class FeedbackOptimizer:
             "active_alerts": self._active_alerts[-10:],
             "recent_actions": [asdict(a) for a in list(self._actions)[-10:]],
             "check_history": list(self._history)[-10:],
+            "drift_detected": self._drift_detected,
+            "drift_info": self._last_drift_info,
         }

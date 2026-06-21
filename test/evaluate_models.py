@@ -26,23 +26,7 @@ sys.path.insert(0, str(ROOT))
 SEED = 42
 
 # ── Shared data generator (same as train_classifier.py) ──────────────────────
-def make_classifier_data(n=10000, seed=SEED):
-    rng      = np.random.RandomState(seed)
-    payload  = rng.beta(2, 5, n)
-    cpu_base = rng.choice([0.1,0.2,0.3,0.4,0.7,0.9], n, p=[0.15,0.20,0.15,0.20,0.15,0.15])
-    cpu_est  = np.clip(cpu_base + rng.normal(0,0.05,n) + payload*0.3, 0, 1)
-    endpoint = rng.choice([0.0,0.25,0.5,0.75,1.0], n, p=[0.25,0.20,0.15,0.25,0.15])
-    req_5s   = rng.beta(2, 8, n)
-    latency  = rng.beta(2, 5, n)*0.6 + cpu_est*0.3
-    queue    = rng.beta(2, 6, n)
-    hour     = rng.uniform(0, 1, n)
-    burst    = (rng.random(n) < 0.12).astype(float)
-    req_5s   = np.where(burst > 0.5, np.clip(req_5s+0.4, 0, 1), req_5s)
-    X        = np.column_stack([payload, cpu_est, endpoint, req_5s, latency, queue, hour, burst])
-    exec_ms  = np.clip(50 + payload*800 + cpu_est*400 + endpoint*300 + queue*100
-                       + burst*200 + rng.normal(0,30,n), 10, 2000)
-    y3       = np.where(exec_ms<100, 0, np.where(exec_ms<=500, 1, 2))
-    return X, y3, exec_ms
+from coordinator.ml.train_classifier import generate_training_data as make_classifier_data
 
 # ─────────────────────────────────────────────────────────────────────────────
 # MODEL 1: XGBoost Classifier
@@ -63,7 +47,7 @@ def evaluate_classifier():
     labels   = ["Light", "Medium", "Heavy"]
 
     # Generate held-out test set (same distribution, different seed)
-    X, y3, exec_ms = make_classifier_data(n=10000, seed=42)
+    X, y3 = make_classifier_data(n=10000, seed=42)
 
     # Inference timing
     t0    = time.perf_counter()
@@ -92,10 +76,10 @@ def evaluate_classifier():
     rec_pc   = recall_score(y3, y_pred, average=None)
 
     # 5-fold CV (faster subset)
-    X_cv, y_cv, _ = make_classifier_data(n=5000, seed=11)
+    X_cv, y_cv = make_classifier_data(n=5000, seed=11)
     cv = StratifiedKFold(n_splits=5, shuffle=True, random_state=SEED)
-    cv_acc = cross_val_score(model, X_cv, y_cv, cv=cv, scoring="accuracy", n_jobs=-1)
-    cv_f1  = cross_val_score(model, X_cv, y_cv, cv=cv, scoring="f1_macro",  n_jobs=-1)
+    cv_acc = cross_val_score(model, X_cv, y_cv, cv=cv, scoring="accuracy", n_jobs=1)
+    cv_f1  = cross_val_score(model, X_cv, y_cv, cv=cv, scoring="f1_macro",  n_jobs=1)
 
     # Class distribution
     unique, counts = np.unique(y3, return_counts=True)

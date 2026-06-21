@@ -7,6 +7,8 @@ import { cn } from '@/lib/utils';
 import {
   LayoutDashboard, Server, Route, Radio,
   GitBranch, Settings, Wifi, WifiOff,
+  Activity, BarChart3, Brain, Zap, FlaskConical,
+  AlertTriangle, TrendingUp
 } from 'lucide-react';
 import { API_BASE_URL } from '@/constants';
 
@@ -15,6 +17,22 @@ const NAV_SECTIONS = [
     title: 'Overview',
     items: [
       { href: '/', icon: LayoutDashboard, label: 'Dashboard' },
+    ],
+  },
+  {
+    title: 'Testing & Analysis',
+    items: [
+      { href: '/traffic', icon: Zap, label: 'Traffic Generator' },
+      { href: '/benchmarks', icon: FlaskConical, label: 'Algorithm Comparison' },
+    ],
+  },
+  {
+    title: 'Machine Learning',
+    items: [
+      { href: '/ml', icon: Brain, label: 'ML Explainability' },
+      { href: '/drift', icon: AlertTriangle, label: 'Drift Detection' },
+      { href: '/forecasting', icon: TrendingUp, label: 'Forecasting' },
+      { href: '/health', icon: Activity, label: 'Model Health' },
     ],
   },
   {

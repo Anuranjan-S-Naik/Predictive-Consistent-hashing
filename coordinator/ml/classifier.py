@@ -154,4 +154,154 @@ class RequestClassifier:
             "fallback_rate": (
                 round(self._total_fallbacks / max(self._total_predictions, 1), 4)
             ),
+            "rolling_accuracy": round(self._rolling_accuracy, 4),
+            "drift_info": self.get_drift_info(),
         }
+
+    # ------------------------------------------------------------------
+    # Drift Detection: Rolling Accuracy + Feature Distribution Tracking
+    # ------------------------------------------------------------------
+
+    def __init_drift_tracking(self):
+        """Lazily called to set up drift tracking data structures."""
+        if hasattr(self, '_drift_initialized'):
+            return
+        self._drift_initialized = True
+        self._rolling_window_size = 500
+        self._outcome_buffer = []   # list of (predicted, actual) tuples
+        self._rolling_accuracy = 1.0
+        # Feature distribution: store histogram bins for PSI
+        self._n_bins = 10
+        self._reference_histograms = {}  # feature_idx -> np.array of bin counts
+        self._current_histograms = {}    # feature_idx -> np.array of bin counts
+        self._feature_buffer = []        # list of feature vectors (recent window)
+        self._feature_buffer_max = 1000
+        self._psi_scores = {}            # feature_idx -> PSI value
+        self._psi_threshold = 0.20       # PSI > 0.20 = significant drift
+
+    def record_outcome(self, predicted_class: str, actual_class: str,
+                       feature_vector: list = None):
+        """Record the true outcome of a classified request for drift detection.
+
+        Called when a request completes and we know the real execution time,
+        which tells us the true class (Light/Medium/Heavy).
+
+        Args:
+            predicted_class: What the classifier predicted ("Light", "Medium", "Heavy").
+            actual_class: The true class based on observed execution time.
+            feature_vector: Optional 8-dim feature vector for PSI tracking.
+        """
+        self.__init_drift_tracking()
+
+        correct = 1 if predicted_class == actual_class else 0
+        self._outcome_buffer.append((predicted_class, actual_class, correct))
+
+        # Keep only the last N outcomes
+        if len(self._outcome_buffer) > self._rolling_window_size:
+            self._outcome_buffer = self._outcome_buffer[-self._rolling_window_size:]
+
+        # Update rolling accuracy
+        if self._outcome_buffer:
+            total_correct = sum(o[2] for o in self._outcome_buffer)
+            self._rolling_accuracy = total_correct / len(self._outcome_buffer)
+
+        # Track feature distributions for PSI
+        if feature_vector is not None and len(feature_vector) == 8:
+            self._feature_buffer.append(feature_vector)
+            if len(self._feature_buffer) > self._feature_buffer_max:
+                self._feature_buffer = self._feature_buffer[-self._feature_buffer_max:]
+
+    def set_reference_distribution(self, X_reference: np.ndarray):
+        """Set the reference (training) feature distribution for PSI calculation.
+
+        Called once at startup with the training data feature matrix.
+
+        Args:
+            X_reference: (N, 8) numpy array of training data features.
+        """
+        self.__init_drift_tracking()
+        for i in range(X_reference.shape[1]):
+            col = X_reference[:, i]
+            hist, _ = np.histogram(col, bins=self._n_bins, range=(0.0, 1.0))
+            # Add smoothing to avoid division by zero
+            hist = hist.astype(float) + 1e-6
+            hist = hist / hist.sum()
+            self._reference_histograms[i] = hist
+        logger.info(f"Reference distribution set from {X_reference.shape[0]} samples")
+
+    def compute_psi(self) -> dict:
+        """Compute Population Stability Index for each feature.
+
+        PSI measures how much the current feature distribution has shifted
+        from the reference (training) distribution.
+
+        PSI < 0.10 : No significant shift
+        PSI 0.10-0.20 : Moderate shift, monitor closely
+        PSI > 0.20 : Significant shift, consider retraining
+
+        Returns:
+            Dict of feature_index -> PSI score.
+        """
+        self.__init_drift_tracking()
+        if not self._reference_histograms or len(self._feature_buffer) < 100:
+            return {}
+
+        X_current = np.array(self._feature_buffer)
+        psi_scores = {}
+
+        for i, ref_hist in self._reference_histograms.items():
+            if i >= X_current.shape[1]:
+                continue
+            col = X_current[:, i]
+            curr_hist, _ = np.histogram(col, bins=self._n_bins, range=(0.0, 1.0))
+            curr_hist = curr_hist.astype(float) + 1e-6
+            curr_hist = curr_hist / curr_hist.sum()
+
+            # PSI = sum((current - reference) * ln(current / reference))
+            psi = float(np.sum((curr_hist - ref_hist) * np.log(curr_hist / ref_hist)))
+            psi_scores[i] = round(psi, 4)
+
+        self._psi_scores = psi_scores
+        return psi_scores
+
+    def get_drift_info(self) -> dict:
+        """Get drift detection status for the API and dashboard.
+
+        Returns:
+            Dict with rolling accuracy, PSI scores, and drift alert status.
+        """
+        self.__init_drift_tracking()
+        psi_scores = self.compute_psi()
+
+        feature_names = [
+            "payload_bytes", "cpu_estimate", "endpoint_id",
+            "requests_last_5s", "avg_latency_ema", "queue_depth",
+            "hour_of_day", "is_burst",
+        ]
+
+        psi_named = {}
+        max_psi = 0.0
+        drifted_features = []
+
+        for idx, score in psi_scores.items():
+            name = feature_names[idx] if idx < len(feature_names) else f"feature_{idx}"
+            psi_named[name] = score
+            if score > max_psi:
+                max_psi = score
+            if score > self._psi_threshold:
+                drifted_features.append(name)
+
+        return {
+            "rolling_accuracy": round(self._rolling_accuracy, 4),
+            "outcome_count": len(self._outcome_buffer),
+            "feature_buffer_size": len(self._feature_buffer),
+            "psi_scores": psi_named,
+            "max_psi": round(max_psi, 4),
+            "psi_threshold": self._psi_threshold,
+            "drift_detected": max_psi > self._psi_threshold,
+            "drifted_features": drifted_features,
+            "retrain_recommended": (
+                self._rolling_accuracy < 0.90 or max_psi > self._psi_threshold
+            ),
+        }
+

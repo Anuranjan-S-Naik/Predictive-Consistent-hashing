@@ -1,0 +1,293 @@
+{
+  "model": "classifier_v1.joblib",
+  "analysis_timestamp": "2026-06-22 03:01:55",
+  "n_samples": 500,
+  "shap_computation_sec": 0.28,
+  "global_feature_importance": {
+    "cpu_estimate": 2.0588,
+    "payload_bytes": 1.9422,
+    "queue_depth": 1.2664,
+    "endpoint_id": 0.6225,
+    "avg_latency_ema": 0.1106,
+    "hour_of_day": 0.094,
+    "requests_last_5s": 0.0728,
+    "is_burst": 0.0038
+  },
+  "per_class_importance": {
+    "Light": {
+      "payload_bytes": 2.1462,
+      "cpu_estimate": 1.4834,
+      "endpoint_id": 0.9936,
+      "requests_last_5s": 0.1027,
+      "avg_latency_ema": 0.1298,
+      "queue_depth": 1.7142,
+      "hour_of_day": 0.1663,
+      "is_burst": 0.0049
+    },
+    "Medium": {
+      "payload_bytes": 1.9837,
+      "cpu_estimate": 2.1189,
+      "endpoint_id": 0.6873,
+      "requests_last_5s": 0.1147,
+      "avg_latency_ema": 0.1298,
+      "queue_depth": 1.115,
+      "hour_of_day": 0.1151,
+      "is_burst": 0.0066
+    },
+    "Heavy": {
+      "payload_bytes": 1.6966,
+      "cpu_estimate": 2.5741,
+      "endpoint_id": 0.1867,
+      "requests_last_5s": 0.0011,
+      "avg_latency_ema": 0.0722,
+      "queue_depth": 0.97,
+      "hour_of_day": 0.0008,
+      "is_burst": 0.0
+    }
+  },
+  "local_explanations": [
+    {
+      "sample_index": 0,
+      "true_class": "Light",
+      "feature_values": {
+        "payload_bytes": 0.0019,
+        "cpu_estimate": 0.1066,
+        "endpoint_id": 0.0,
+        "requests_last_5s": 0.3553,
+        "avg_latency_ema": 0.1877,
+        "queue_depth": 0.0109,
+        "hour_of_day": 0.1112,
+        "is_burst": 0.0
+      },
+      "shap_values": {
+        "payload_bytes": {
+          "Light": 2.8365,
+          "Medium": -2.3443,
+          "Heavy": -1.5098
+        },
+        "cpu_estimate": {
+          "Light": 0.9741,
+          "Medium": -0.572,
+          "Heavy": -2.2682
+        },
+        "endpoint_id": {
+          "Light": 1.3102,
+          "Medium": -1.8748,
+          "Heavy": -0.1941
+        },
+        "requests_last_5s": {
+          "Light": 0.0578,
+          "Medium": -0.0959,
+          "Heavy": -0.0007
+        },
+        "avg_latency_ema": {
+          "Light": 0.1854,
+          "Medium": -0.0313,
+          "Heavy": -0.2
+        },
+        "queue_depth": {
+          "Light": 1.4586,
+          "Medium": -1.4265,
+          "Heavy": -0.9706
+        },
+        "hour_of_day": {
+          "Light": 0.1856,
+          "Medium": -0.0315,
+          "Heavy": -0.001
+        },
+        "is_burst": {
+          "Light": 0.0001,
+          "Medium": -0.0005,
+          "Heavy": -0.0
+        }
+      },
+      "top_3_drivers": [
+        {
+          "feature": "payload_bytes",
+          "shap_value": 2.8365,
+          "direction": "pushes toward",
+          "class": "Light"
+        },
+        {
+          "feature": "queue_depth",
+          "shap_value": 1.4586,
+          "direction": "pushes toward",
+          "class": "Light"
+        },
+        {
+          "feature": "endpoint_id",
+          "shap_value": 1.3102,
+          "direction": "pushes toward",
+          "class": "Light"
+        }
+      ]
+    },
+    {
+      "sample_index": 4,
+      "true_class": "Medium",
+      "feature_values": {
+        "payload_bytes": 0.0569,
+        "cpu_estimate": 0.212,
+        "endpoint_id": 0.25,
+        "requests_last_5s": 0.0632,
+        "avg_latency_ema": 0.2465,
+        "queue_depth": 0.1498,
+        "hour_of_day": 0.341,
+        "is_burst": 0.0
+      },
+      "shap_values": {
+        "payload_bytes": {
+          "Light": -2.5384,
+          "Medium": 2.1301,
+          "Heavy": -1.5726
+        },
+        "cpu_estimate": {
+          "Light": -0.2788,
+          "Medium": 1.6504,
+          "Heavy": -2.2939
+        },
+        "endpoint_id": {
+          "Light": 0.0114,
+          "Medium": 0.2023,
+          "Heavy": -0.2277
+        },
+        "requests_last_5s": {
+          "Light": 0.2095,
+          "Medium": -0.1133,
+          "Heavy": -0.0001
+        },
+        "avg_latency_ema": {
+          "Light": 0.147,
+          "Medium": -0.1356,
+          "Heavy": -0.0135
+        },
+        "queue_depth": {
+          "Light": -2.6263,
+          "Medium": 1.6919,
+          "Heavy": -1.0356
+        },
+        "hour_of_day": {
+          "Light": 0.0215,
+          "Medium": 0.0959,
+          "Heavy": -0.001
+        },
+        "is_burst": {
+          "Light": 0.0,
+          "Medium": -0.0001,
+          "Heavy": -0.0
+        }
+      },
+      "top_3_drivers": [
+        {
+          "feature": "payload_bytes",
+          "shap_value": 2.1301,
+          "direction": "pushes toward",
+          "class": "Medium"
+        },
+        {
+          "feature": "queue_depth",
+          "shap_value": 1.6919,
+          "direction": "pushes toward",
+          "class": "Medium"
+        },
+        {
+          "feature": "cpu_estimate",
+          "shap_value": 1.6504,
+          "direction": "pushes toward",
+          "class": "Medium"
+        }
+      ]
+    },
+    {
+      "sample_index": 2,
+      "true_class": "Heavy",
+      "feature_values": {
+        "payload_bytes": 0.4271,
+        "cpu_estimate": 0.9547,
+        "endpoint_id": 1.0,
+        "requests_last_5s": 0.1085,
+        "avg_latency_ema": 0.3699,
+        "queue_depth": 0.9763,
+        "hour_of_day": 0.0142,
+        "is_burst": 0.0
+      },
+      "shap_values": {
+        "payload_bytes": {
+          "Light": -1.9089,
+          "Medium": -2.2487,
+          "Heavy": 1.8868
+        },
+        "cpu_estimate": {
+          "Light": -1.4948,
+          "Medium": -2.7718,
+          "Heavy": 3.2004
+        },
+        "endpoint_id": {
+          "Light": -1.2286,
+          "Medium": 0.1256,
+          "Heavy": 0.2625
+        },
+        "requests_last_5s": {
+          "Light": -0.1909,
+          "Medium": 0.1977,
+          "Heavy": 0.0013
+        },
+        "avg_latency_ema": {
+          "Light": -0.0908,
+          "Medium": -0.2153,
+          "Heavy": 0.0142
+        },
+        "queue_depth": {
+          "Light": -1.7549,
+          "Medium": -0.6699,
+          "Heavy": 1.046
+        },
+        "hour_of_day": {
+          "Light": 0.1333,
+          "Medium": 0.0112,
+          "Heavy": -0.0002
+        },
+        "is_burst": {
+          "Light": 0.0,
+          "Medium": -0.0001,
+          "Heavy": -0.0
+        }
+      },
+      "top_3_drivers": [
+        {
+          "feature": "cpu_estimate",
+          "shap_value": 3.2004,
+          "direction": "pushes toward",
+          "class": "Heavy"
+        },
+        {
+          "feature": "payload_bytes",
+          "shap_value": 1.8868,
+          "direction": "pushes toward",
+          "class": "Heavy"
+        },
+        {
+          "feature": "queue_depth",
+          "shap_value": 1.046,
+          "direction": "pushes toward",
+          "class": "Heavy"
+        }
+      ]
+    }
+  ],
+  "feature_names": [
+    "payload_bytes",
+    "cpu_estimate",
+    "endpoint_id",
+    "requests_last_5s",
+    "avg_latency_ema",
+    "queue_depth",
+    "hour_of_day",
+    "is_burst"
+  ],
+  "class_names": [
+    "Light",
+    "Medium",
+    "Heavy"
+  ]
+}

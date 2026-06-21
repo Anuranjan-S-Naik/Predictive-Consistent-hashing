@@ -13,11 +13,14 @@ Responsibilities:
 """
 
 import asyncio
+import json
 import logging
 import os
 import time
 from contextlib import asynccontextmanager
 from typing import Dict, Optional
+from urllib.request import urlopen, Request as URLRequest
+from urllib.error import URLError
 
 # Phase 3 pipeline imports
 from coordinator.routing.hash_ring import ConsistentHashRing
@@ -34,6 +37,7 @@ from coordinator.db.influxdb_client import InfluxDBClient
 # DAA + Feedback imports
 from coordinator.routing.daa import DynamicAdaptiveAllocator
 from coordinator.feedback.optimizer import FeedbackOptimizer
+from coordinator.routing.baselines import RoundRobinBalancer, LeastConnectionsBalancer, StaticHashBalancer
 
 # Phase 5: ML imports
 from coordinator.ml.classifier import RequestClassifier
@@ -62,6 +66,10 @@ API_KEY = os.getenv("API_KEY", "dev-api-key-change-me")
 ADMIN_API_KEY = os.getenv("ADMIN_API_KEY", "dev-admin-key-change-me")
 COORDINATOR_HOST = os.getenv("COORDINATOR_HOST", "0.0.0.0")
 COORDINATOR_PORT = int(os.getenv("COORDINATOR_PORT", "8000"))
+
+# Routing mode: 'predictive' (default), 'round_robin', 'least_conn', 'static_hash',
+#               'ablation_classifier_only', 'ablation_forecaster_only'
+ROUTING_MODE = os.getenv("ROUTING_MODE", "predictive")
 
 logging.basicConfig(
     level=getattr(logging, LOG_LEVEL),
@@ -204,6 +212,76 @@ feedback_optimizer: Optional[FeedbackOptimizer] = None
 ml_classifier: Optional[RequestClassifier] = None
 ml_forecaster: Optional[TrafficForecaster] = None
 
+# Node HTTP addresses for metrics polling and request forwarding
+node_http_addresses: Dict[str, str] = {}
+_metrics_poll_task: Optional[asyncio.Task] = None
+
+
+async def _poll_node_metrics():
+    """Background loop: poll each node's HTTP /health endpoint every 2s."""
+    while True:
+        for node_name, base_url in node_http_addresses.items():
+            try:
+                metrics = await asyncio.get_event_loop().run_in_executor(
+                    None, _fetch_node_metrics, base_url
+                )
+                if metrics and allocation_engine:
+                    allocation_engine.update_node_metrics(node_name, {
+                        "cpu_pct": metrics.get("cpu_pct", 5.0),
+                        "queue_depth": metrics.get("queue_depth_total", 0),
+                        "queue_depth_light": metrics.get("queue_depth_light", 0),
+                        "queue_depth_medium": metrics.get("queue_depth_medium", 0),
+                        "queue_depth_heavy": metrics.get("queue_depth_heavy", 0),
+                        "queue_max": 450,
+                        "latency_ema_ms": metrics.get("latency_ema_ms", 0.0),
+                        "latency_max_ms": 5000.0,
+                        "throughput_rps": metrics.get("throughput_rps", 0.0),
+                        "total_requests_processed": metrics.get("total_requests_processed", 0),
+                        "memory_pct": metrics.get("memory_pct", 0.0),
+                        "predicted_load": 0.0,
+                    })
+            except Exception as e:
+                logger.debug(f"Failed to poll metrics for {node_name}: {e}")
+        await asyncio.sleep(2)
+
+
+def _fetch_node_metrics(base_url: str) -> dict:
+    """Synchronous HTTP fetch of node metrics (run in executor)."""
+    try:
+        url = f"{base_url}/health"
+        req = URLRequest(url, method="GET")
+        with urlopen(req, timeout=2) as resp:
+            return json.loads(resp.read().decode())
+    except Exception:
+        return None
+
+
+async def _forward_request_to_node(node_name: str, request_data: dict):
+    """Forward a classified request to the assigned node via HTTP."""
+    base_url = node_http_addresses.get(node_name)
+    if not base_url:
+        return
+    try:
+        await asyncio.get_event_loop().run_in_executor(
+            None, _send_to_node, base_url, request_data
+        )
+    except Exception as e:
+        logger.debug(f"Failed to forward request to {node_name}: {e}")
+
+
+def _send_to_node(base_url: str, request_data: dict):
+    """Synchronous HTTP POST to node's /route endpoint (run in executor)."""
+    try:
+        url = f"{base_url}/route"
+        data = json.dumps(request_data).encode("utf-8")
+        req = URLRequest(url, data=data, method="POST")
+        req.add_header("Content-Type", "application/json")
+        with urlopen(req, timeout=3) as resp:
+            return json.loads(resp.read().decode())
+    except Exception:
+        return None
+
+
 # ---------------------------------------------------------------------------
 # Lifespan (startup / shutdown)
 # ---------------------------------------------------------------------------
@@ -246,7 +324,21 @@ async def lifespan(app: FastAPI):
         hash_ring.add_node(node["name"], node.get("capacity_score", 100))
     logger.info(f"Hash ring initialized: {hash_ring}")
 
-    allocation_engine = AllocationEngine(config=app_config)
+    # --- Select allocation engine based on ROUTING_MODE ---
+    node_names = [n["name"] for n in nodes]
+    if ROUTING_MODE == "round_robin":
+        allocation_engine = RoundRobinBalancer(node_names)
+        logger.info(f"ROUTING_MODE={ROUTING_MODE}: using RoundRobinBalancer (no ML, no load awareness)")
+    elif ROUTING_MODE == "least_conn":
+        allocation_engine = LeastConnectionsBalancer(node_names)
+        logger.info(f"ROUTING_MODE={ROUTING_MODE}: using LeastConnectionsBalancer (reactive only)")
+    elif ROUTING_MODE == "static_hash":
+        allocation_engine = StaticHashBalancer(hash_ring)
+        logger.info(f"ROUTING_MODE={ROUTING_MODE}: using StaticHashBalancer (fixed vnodes, no DAA)")
+    else:
+        allocation_engine = AllocationEngine(config=app_config)
+        logger.info(f"ROUTING_MODE={ROUTING_MODE}: using AllocationEngine (full predictive system)")
+
     # Seed initial metrics for each node
     for node in nodes:
         allocation_engine.update_node_metrics(node["name"], {
@@ -265,12 +357,20 @@ async def lifespan(app: FastAPI):
     feature_pipeline = FeaturePipeline(config=app_config)
 
     # --- Phase 5: Initialize ML components ---
-    ml_classifier = RequestClassifier(config=app_config)
-    classifier_ok = ml_classifier.load()
-    if classifier_ok:
-        logger.info("Phase 5: XGBoost classifier loaded successfully")
+    # In baseline modes, disable the ML classifier to get a fair comparison
+    use_ml = ROUTING_MODE in ("predictive", "ablation_classifier_only", "ablation_forecaster_only")
+    use_classifier = ROUTING_MODE in ("predictive", "ablation_classifier_only")
+
+    if use_classifier:
+        ml_classifier = RequestClassifier(config=app_config)
+        classifier_ok = ml_classifier.load()
+        if classifier_ok:
+            logger.info("Phase 5: XGBoost classifier loaded successfully")
+        else:
+            logger.warning("Phase 5: Classifier not available, using heuristic fallback")
     else:
-        logger.warning("Phase 5: Classifier not available, using heuristic fallback")
+        ml_classifier = None
+        logger.info(f"ROUTING_MODE={ROUTING_MODE}: ML classifier DISABLED (heuristic fallback)")
 
     request_router = RequestRouter(
         hash_ring=hash_ring,
@@ -279,15 +379,28 @@ async def lifespan(app: FastAPI):
         feature_pipeline=feature_pipeline,
         classifier=ml_classifier,
     )
-    logger.info("Phase 3+5 pipeline initialized: FeaturePipeline → Classifier → AllocationEngine → ChordRouter")
+    logger.info(f"Pipeline initialized (ROUTING_MODE={ROUTING_MODE})")
 
     # --- Phase 4: Initialize datastore clients ---
     ds_cfg = app_config.get("datastores", {})
 
     # PostgreSQL batch writer
     pg_cfg = ds_cfg.get("postgresql", {})
+    
+    import asyncpg
+    try:
+        dsn = os.getenv("POSTGRES_DSN", "postgresql://paf:paf_secret@localhost:5432/paf_db")
+        dsn = dsn.replace("postgresql+asyncpg", "postgresql")
+        # If we are running in docker, POSTGRES_DSN will point to 'postgres'
+        # But if we run locally or port forward, we might use 'localhost'
+        db_pool = await asyncpg.create_pool(dsn)
+        logger.info("Connected to PostgreSQL (asyncpg pool created)")
+    except Exception as e:
+        logger.error(f"Failed to connect to PostgreSQL: {e}")
+        db_pool = None
+
     postgres_writer = PostgresBatchWriter(
-        db_pool=None,  # Real pool initialized when asyncpg connects
+        db_pool=db_pool,
         batch_size=pg_cfg.get("batch_size", 1000),
         batch_interval_sec=pg_cfg.get("batch_interval_sec", 1.0),
     )
@@ -318,39 +431,64 @@ async def lifespan(app: FastAPI):
 
     logger.info("Phase 4 datastores initialized: PostgreSQL batch writer, Redis caches, InfluxDB")
 
-    # --- DAA + Feedback: Initialize ---
-    daa_engine = DynamicAdaptiveAllocator(
-        hash_ring=hash_ring,
-        allocation_engine=allocation_engine,
-        config=app_config,
-    )
-    await daa_engine.start()
+    # --- DAA + Feedback: Initialize (disabled in baseline modes) ---
+    use_daa = ROUTING_MODE in ("predictive", "ablation_classifier_only", "ablation_forecaster_only")
 
-    feedback_optimizer = FeedbackOptimizer(
-        allocation_engine=allocation_engine,
-        daa=daa_engine,
-        config=app_config,
-    )
-    await feedback_optimizer.start()
+    if use_daa:
+        daa_engine = DynamicAdaptiveAllocator(
+            hash_ring=hash_ring,
+            allocation_engine=allocation_engine,
+            config=app_config,
+        )
+        await daa_engine.start()
 
-    logger.info("DAA + Feedback optimizer initialized")
-
-    # --- Phase 5: Initialize forecaster (after DAA so it can notify it) ---
-    ml_forecaster = TrafficForecaster(
-        config=app_config,
-        daa_engine=daa_engine,
-        redis_client=redis_ring_cache,
-        influxdb_client=influxdb_client,
-    )
-    forecaster_ok = ml_forecaster.load()
-    if forecaster_ok:
-        logger.info("Phase 5: GRU forecaster loaded successfully")
+        feedback_optimizer = FeedbackOptimizer(
+            allocation_engine=allocation_engine,
+            daa=daa_engine,
+            config=app_config,
+            classifier=ml_classifier,
+        )
+        await feedback_optimizer.start()
+        logger.info("DAA + Feedback optimizer initialized")
     else:
-        logger.warning("Phase 5: Forecaster not available, using EMA fallback")
-    await ml_forecaster.start()
+        daa_engine = None
+        feedback_optimizer = None
+        logger.info(f"ROUTING_MODE={ROUTING_MODE}: DAA + Feedback DISABLED (static routing)")
 
-    # Wire forecaster into the request router
-    request_router.forecaster = ml_forecaster
+    # --- Phase 5: Initialize forecaster (disabled in baseline modes) ---
+    use_forecaster = ROUTING_MODE in ("predictive", "ablation_forecaster_only")
+
+    if use_forecaster:
+        ml_forecaster = TrafficForecaster(
+            config=app_config,
+            daa_engine=daa_engine,
+            redis_client=redis_ring_cache,
+            influxdb_client=influxdb_client,
+        )
+        forecaster_ok = ml_forecaster.load()
+        if forecaster_ok:
+            logger.info("Phase 5: GRU forecaster loaded successfully")
+        else:
+            logger.warning("Phase 5: Forecaster not available, using EMA fallback")
+        await ml_forecaster.start()
+        request_router.forecaster = ml_forecaster
+    else:
+        ml_forecaster = None
+        logger.info(f"ROUTING_MODE={ROUTING_MODE}: GRU forecaster DISABLED")
+
+    # --- Build node HTTP address map and start metrics polling ---
+    global _metrics_poll_task
+    for node in nodes:
+        name = node["name"]
+        # The grpc_address is like "node_s1:50051", extract hostname
+        grpc_addr = node.get("grpc_address", "")
+        hostname = grpc_addr.split(":")[0] if ":" in grpc_addr else name
+        # Node HTTP metrics port is always 9100 inside Docker
+        node_http_addresses[name] = f"http://{hostname}:9100"
+    logger.info(f"Node HTTP addresses: {node_http_addresses}")
+
+    _metrics_poll_task = asyncio.create_task(_poll_node_metrics())
+    logger.info("Background node metrics polling started (every 2s)")
 
     logger.info("Phase 5 ML pipeline fully initialized")
     logger.info(f"Coordinator ready on {COORDINATOR_HOST}:{COORDINATOR_PORT}")
@@ -359,6 +497,8 @@ async def lifespan(app: FastAPI):
 
     # --- Shutdown ---
     logger.info("Coordinator shutting down...")
+    if _metrics_poll_task:
+        _metrics_poll_task.cancel()
     if ml_forecaster:
         await ml_forecaster.stop()
     if daa_engine:
@@ -511,6 +651,17 @@ async def submit_request(request: Request, _key: str = Depends(verify_api_key)):
     if result.get("routing_method") == "chord_router":
         CHORD_OVERFLOW.inc()
 
+    # Forward the request to the assigned node (non-blocking)
+    assigned_node = result.get("assigned_node")
+    if assigned_node:
+        asyncio.create_task(_forward_request_to_node(assigned_node, {
+            "request_id": result.get("request_id", ""),
+            "request_class": predicted_class,
+            "endpoint": body.get("endpoint", "/api/status"),
+            "method": body.get("method", "GET"),
+            "payload_bytes": body.get("payload_bytes", 128),
+        }))
+
     # Phase 4: Async buffer to PostgreSQL (non-blocking)
     if postgres_writer:
         await postgres_writer.buffer_request(RequestRecord(
@@ -529,6 +680,17 @@ async def submit_request(request: Request, _key: str = Depends(verify_api_key)):
             assigned_by=result.get("routing_method", "allocation_engine"),
             allocation_score=result.get("allocation_score", 0.0),
         ))
+    # Drift tracking: record prediction + features for PSI monitoring
+    if ml_classifier and hasattr(ml_classifier, 'record_outcome'):
+        feature_vector = result.get("feature_vector", [])
+        # We record predicted_class as both predicted and actual here.
+        # When the node responds with actual execution time, the completion
+        # callback below will update with the true class.
+        ml_classifier.record_outcome(
+            predicted_class=predicted_class,
+            actual_class=predicted_class,  # Placeholder until completion
+            feature_vector=feature_vector,
+        )
 
     return result
 
@@ -572,20 +734,6 @@ async def get_ring():
     return hash_ring.get_ring_snapshot()
 
 
-@app.get("/api/v1/forecast", tags=["ml"])
-async def get_forecast():
-    """Return latest forecaster output.
-
-    **Phase 2 stub** — returns empty forecast.
-    Will be populated in Phase 5 after GRU forecaster integration.
-    """
-    return {
-        "status": "stub",
-        "message": "Forecaster not yet initialized (Phase 5)",
-        "predicted_heavy_count": None,
-        "burst_imminent": False,
-        "forecast_age_sec": None,
-    }
 
 
 @app.get("/api/v1/daa", tags=["system"])
@@ -633,6 +781,27 @@ async def get_allocation_status():
         "node_metrics": node_metrics,
         "class_counts": class_counts,
         "class_distribution": class_distribution,
+    }
+
+
+@app.get("/api/v1/routing_mode", tags=["system"])
+async def get_routing_mode():
+    """Return the current routing mode and component status.
+
+    Used by test scripts and dashboard to identify which
+    routing algorithm is active for baseline comparisons.
+    """
+    return {
+        "routing_mode": ROUTING_MODE,
+        "ml_classifier_enabled": ml_classifier is not None,
+        "ml_forecaster_enabled": ml_forecaster is not None,
+        "daa_enabled": daa_engine is not None,
+        "feedback_enabled": feedback_optimizer is not None,
+        "engine_type": type(allocation_engine).__name__,
+        "supported_modes": [
+            "predictive", "round_robin", "least_conn", "static_hash",
+            "ablation_classifier_only", "ablation_forecaster_only",
+        ],
     }
 
 

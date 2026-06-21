@@ -124,6 +124,10 @@ NODE_VNODE_COUNT.labels(node=NODE_NAME).set(0)
 NODE_THROUGHPUT.labels(node=NODE_NAME).set(0)
 NODE_UPTIME.labels(node=NODE_NAME).set(0)
 
+# Shared completion tracking — populated by on_request_completed, consumed by metrics_update_loop
+_recent_completions: list = []
+_recent_exec_times: list = []
+
 # ---------------------------------------------------------------------------
 # Node State
 # ---------------------------------------------------------------------------
@@ -275,11 +279,20 @@ async def handle_http_request(reader, writer):
         request_line = await asyncio.wait_for(reader.readline(), timeout=5)
         request_str = request_line.decode("utf-8", errors="replace").strip()
 
-        # Read remaining headers (discard)
+        # Read remaining headers and body
+        content_length = 0
         while True:
             line = await asyncio.wait_for(reader.readline(), timeout=5)
+            line_str = line.decode("utf-8", errors="replace").strip()
+            if line_str.lower().startswith("content-length:"):
+                content_length = int(line_str.split(":")[1].strip())
             if line == b"\r\n" or line == b"\n" or line == b"":
                 break
+
+        # Read body if present
+        body_data = b""
+        if content_length > 0:
+            body_data = await asyncio.wait_for(reader.read(content_length), timeout=5)
 
         # Route request
         if "GET /metrics" in request_str:
@@ -288,13 +301,23 @@ async def handle_http_request(reader, writer):
             content_type = CONTENT_TYPE_LATEST
             status = "200 OK"
         elif "GET /health" in request_str:
-            body = (
-                f'{{"status":"healthy","node":"{NODE_NAME}",'
-                f'"uptime":{node_state.uptime_sec},'
-                f'"capacity":{CAPACITY_SCORE}}}'
-            ).encode("utf-8")
+            import json
+            body = json.dumps(node_state.to_dict()).encode("utf-8")
             content_type = "application/json"
             status = "200 OK"
+        elif "POST /route" in request_str:
+            import json
+            try:
+                req_data = json.loads(body_data.decode("utf-8")) if body_data else {}
+                servicer = NodeServicer()
+                result = await servicer.RouteRequest(req_data)
+                body = json.dumps(result).encode("utf-8")
+                content_type = "application/json"
+                status = "200 OK"
+            except Exception as e:
+                body = json.dumps({"error": str(e)}).encode("utf-8")
+                content_type = "application/json"
+                status = "500 Internal Server Error"
         else:
             body = b"Not Found"
             content_type = "text/plain"
@@ -335,31 +358,38 @@ async def start_http_server(port: int):
 
 async def metrics_update_loop():
     """Periodically update Prometheus metrics and simulated CPU (every 1 second)."""
+    global _recent_completions, _recent_exec_times
     EMA_ALPHA = 0.3
-    recent_completions = []  # Timestamps for throughput calculation
 
     while True:
+        now = time.time()
+
         # Update queue depths from scheduler
         depths = scheduler.get_queue_depths()
         node_state.queue_depth_light = depths.get("Light", 0)
         node_state.queue_depth_medium = depths.get("Medium", 0)
         node_state.queue_depth_heavy = depths.get("Heavy", 0)
 
-        # Simulated CPU: proportional to active executor tasks + queue depth
+        # Throughput: completions per second (rolling 10s window)
+        _recent_completions = [t for t in _recent_completions if t > now - 10]
+        completions_in_window = len(_recent_completions)
+        node_state.throughput_rps = completions_in_window / 10.0
+
+        # Simulated CPU: based on rolling throughput + active tasks + queue depth
         active = executor.active_count if executor else 0
         total_q = scheduler.total_depth
         max_concurrent = CPU_CORES * 2  # Max concurrent tasks per core
-        load_ratio = (active + total_q * 0.1) / max(max_concurrent, 1)
-        target_cpu = min(5.0 + load_ratio * 90.0, 98.0)  # 5% idle, up to 98%
+        # Use throughput as the primary load signal (it reflects actual work done)
+        throughput_ratio = node_state.throughput_rps / max(max_concurrent * 5, 1)
+        queue_ratio = total_q / max(450, 1)  # Queue depth relative to max
+        active_ratio = active / max(max_concurrent, 1)
+        # Weighted combination: throughput is most reliable, active + queue are instantaneous
+        load_ratio = throughput_ratio * 0.5 + active_ratio * 0.3 + queue_ratio * 0.2
+        target_cpu = min(5.0 + load_ratio * 93.0, 98.0)  # 5% idle, up to 98%
         node_state.cpu_pct = EMA_ALPHA * target_cpu + (1 - EMA_ALPHA) * node_state.cpu_pct
 
         # Simulated memory: slow-growing with request count
         node_state.memory_pct = min(10.0 + node_state.total_processed * 0.001, 80.0)
-
-        # Throughput: completions per second
-        now = time.time()
-        recent_completions = [t for t in recent_completions if t > now - 10]
-        node_state.throughput_rps = len(recent_completions) / 10.0
 
         node_state.update_prometheus_metrics()
         await asyncio.sleep(1)
@@ -367,6 +397,7 @@ async def metrics_update_loop():
 
 async def on_request_completed(result):
     """Callback from executor when a request completes."""
+    global _recent_completions
     node_state.total_processed += 1
     NODE_REQUESTS_PROCESSED.labels(
         node=NODE_NAME, **{"class": result.request_class}
@@ -374,6 +405,9 @@ async def on_request_completed(result):
     NODE_LATENCY.labels(
         node=NODE_NAME, **{"class": result.request_class}
     ).observe(result.execution_time_ms)
+
+    # Track completion timestamp for throughput calculation
+    _recent_completions.append(time.time())
 
     # Update latency EMA
     EMA_ALPHA = 0.3

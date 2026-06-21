@@ -34,20 +34,20 @@ interface DisplayNode {
   grpc_address: string;
 }
 
-function enrichNode(node: BackendNode, tick: number): DisplayNode {
+function enrichNode(node: BackendNode, metrics: any = {}): DisplayNode {
   const cap = node.capacity_score || 100;
   return {
     node_id: node.name,
     capacity_score: cap,
-    cpu_pct: 10 + Math.random() * 65,
-    memory_pct: 15 + Math.random() * 40,
-    queue_depth_light: Math.floor(Math.random() * 100),
-    queue_depth_medium: Math.floor(Math.random() * 70),
-    queue_depth_heavy: Math.floor(Math.random() * 40),
-    latency_ema_ms: 30 + Math.random() * 250,
-    throughput_rps: 50 + Math.random() * 200,
-    vnode_count: Math.floor(cap * 1.5),
-    total_requests_processed: Math.floor(5000 + Math.random() * 80000),
+    cpu_pct: metrics.cpu_pct || 0,
+    memory_pct: metrics.memory_pct || 0,
+    queue_depth_light: metrics.queue_depth_light || 0,
+    queue_depth_medium: metrics.queue_depth_medium || 0,
+    queue_depth_heavy: metrics.queue_depth_heavy || 0,
+    latency_ema_ms: metrics.latency_ema_ms || 0,
+    throughput_rps: metrics.throughput_rps || 0,
+    vnode_count: node.vnode_count || 0,
+    total_requests_processed: metrics.total_requests_processed || 0,
     is_healthy: node.grpc_connected,
     cpu_cores: node.cpu_cores || 4,
     memory_gb: node.memory_gb || 8,
@@ -59,16 +59,16 @@ function generateMockNode(name: string, cap: number): DisplayNode {
   return {
     node_id: name,
     capacity_score: cap,
-    cpu_pct: 10 + Math.random() * 65,
-    memory_pct: 15 + Math.random() * 40,
-    queue_depth_light: Math.floor(Math.random() * 100),
-    queue_depth_medium: Math.floor(Math.random() * 70),
-    queue_depth_heavy: Math.floor(Math.random() * 40),
-    latency_ema_ms: 30 + Math.random() * 250,
-    throughput_rps: 50 + Math.random() * 200,
-    vnode_count: Math.floor(cap * 1.5),
-    total_requests_processed: Math.floor(5000 + Math.random() * 80000),
-    is_healthy: Math.random() > 0.03,
+    cpu_pct: 0,
+    memory_pct: 0,
+    queue_depth_light: 0,
+    queue_depth_medium: 0,
+    queue_depth_heavy: 0,
+    latency_ema_ms: 0,
+    throughput_rps: 0,
+    vnode_count: 0,
+    total_requests_processed: 0,
+    is_healthy: false,
     cpu_cores: 4,
     memory_gb: 8,
     grpc_address: 'N/A',
@@ -82,16 +82,24 @@ function useNodes() {
 
   const fetchNodes = useCallback(async () => {
     tickRef.current += 1;
+    const opts = { headers: { 'X-API-Key': 'dev-api-key-change-me' }, signal: AbortSignal.timeout(4000) };
+    
+    let allocData: any = null;
     try {
-      const res = await fetch(`${API_BASE_URL}/api/v1/nodes`, {
-        headers: { 'X-API-Key': 'dev-api-key-change-me' },
-        signal: AbortSignal.timeout(4000),
-      });
+      const resAlloc = await fetch(`${API_BASE_URL}/api/v1/allocation`, opts);
+      if (resAlloc.ok) allocData = await resAlloc.json();
+    } catch { /* ignore */ }
+
+    try {
+      const res = await fetch(`${API_BASE_URL}/api/v1/nodes`, opts);
       if (res.ok) {
         const data = await res.json();
         const backendNodes: BackendNode[] = data.nodes || [];
         if (backendNodes.length > 0) {
-          setNodes(backendNodes.map(n => enrichNode(n, tickRef.current)));
+          setNodes(backendNodes.map(n => {
+            const metrics = allocData?.node_metrics?.[n.name] || {};
+            return enrichNode(n, metrics);
+          }));
           setIsLive(true);
           return;
         }
@@ -99,8 +107,10 @@ function useNodes() {
     } catch { /* fallback */ }
     setIsLive(false);
     setNodes([
-      generateMockNode('node_s1', 100), generateMockNode('node_s2', 70),
-      generateMockNode('node_s3', 150), generateMockNode('node_s4', 90),
+      generateMockNode('node_s1', 100),
+      generateMockNode('node_s2', 70),
+      generateMockNode('node_s3', 150),
+      generateMockNode('node_s4', 90),
     ]);
   }, []);
 

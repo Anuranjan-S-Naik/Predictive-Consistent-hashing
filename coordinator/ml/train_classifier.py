@@ -39,67 +39,85 @@ LABEL_NAMES = ["Light", "Medium", "Heavy"]
 def generate_training_data(n: int = N_SAMPLES, seed: int = SEED):
     """Generate synthetic labeled data that mimics real traffic patterns.
 
-    The ground-truth class is derived from simulated execution_ms which
-    correlates with payload_bytes, cpu_estimate, and endpoint type.
+    Generates a balanced dataset (30% Light, 40% Medium, 30% Heavy) by
+    adjusting feature distributions for each class type.
     """
     rng = np.random.RandomState(seed)
 
-    # --- Feature generation ---
-    # F0: payload_bytes_norm (0-1), larger payloads → heavier
-    payload = rng.beta(2, 5, n)  # Skewed toward small payloads
+    n_light = int(n * 0.30)
+    n_medium = int(n * 0.40)
+    n_heavy = n - n_light - n_medium
 
-    # F1: cpu_estimate (0-1), correlates with endpoint type
-    cpu_base = rng.choice([0.1, 0.2, 0.3, 0.4, 0.7, 0.9], n,
-                          p=[0.15, 0.20, 0.15, 0.20, 0.15, 0.15])
-    cpu_noise = rng.normal(0, 0.05, n)
-    cpu_est = np.clip(cpu_base + cpu_noise + payload * 0.3, 0, 1)
+    def gen_features(count, class_type):
+        if class_type == "Light":
+            payload = rng.beta(1, 10, count) * 0.05
+            cpu_base = rng.choice([0.05, 0.1], count)
+            endpoint_id = rng.choice([0.0, 0.25], count, p=[0.7, 0.3])
+            queue = rng.beta(1, 10, count) * 0.1
+            burst = np.zeros(count)
+        elif class_type == "Medium":
+            payload = rng.beta(2, 5, count) * 0.3
+            cpu_base = rng.choice([0.2, 0.3, 0.4], count)
+            endpoint_id = rng.choice([0.25, 0.5, 0.75], count)
+            queue = rng.beta(2, 5, count) * 0.5
+            burst = (rng.random(count) < 0.05).astype(float)
+        else: # Heavy
+            payload = rng.beta(2, 2, count) * 0.8 + 0.2
+            cpu_base = rng.choice([0.6, 0.8, 0.9], count)
+            endpoint_id = rng.choice([0.75, 1.0], count, p=[0.3, 0.7])
+            queue = rng.beta(2, 2, count) * 0.8 + 0.2
+            burst = (rng.random(count) < 0.2).astype(float)
+            
+        cpu_noise = rng.normal(0, 0.05, count)
+        cpu_est = np.clip(cpu_base + cpu_noise + payload * 0.3, 0, 1)
+        
+        req_5s = rng.beta(2, 8, count)
+        if class_type == "Heavy":
+            req_5s = np.where(burst > 0.5, np.clip(req_5s + 0.4, 0, 1), req_5s)
+            
+        latency = np.clip(rng.beta(2, 5, count) * 0.6 + cpu_est * 0.3, 0, 1)
+        hour = rng.uniform(0, 1, count)
+        
+        # Simulate execution_ms from features
+        exec_ms = (
+            50
+            + payload * 800
+            + cpu_est * 400
+            + endpoint_id * 300
+            + queue * 100
+            + burst * 200
+            + rng.normal(0, 10, count)
+        )
+        
+        # Force bounds to guarantee class labels match the intent
+        if class_type == "Light":
+            exec_ms = np.clip(exec_ms, 10, 99)
+        elif class_type == "Medium":
+            exec_ms = np.clip(exec_ms, 100, 499)
+        else:
+            exec_ms = np.clip(exec_ms, 500, 2000)
+            
+        y = np.full(count, LABEL_MAP[class_type])
+        X = np.column_stack([payload, cpu_est, endpoint_id, req_5s,
+                             latency, queue, hour, burst])
+        return X, y
 
-    # F2: endpoint_id_norm (0, 0.25, 0.5, 0.75, 1.0)
-    endpoint_id = rng.choice([0.0, 0.25, 0.5, 0.75, 1.0], n,
-                             p=[0.25, 0.20, 0.15, 0.25, 0.15])
-
-    # F3: requests_last_5s (0-1), higher during bursts
-    req_5s = rng.beta(2, 8, n)
-
-    # F4: avg_latency_ema (0-1)
-    latency = rng.beta(2, 5, n) * 0.6 + cpu_est * 0.3
-
-    # F5: queue_depth (0-1)
-    queue = rng.beta(2, 6, n)
-
-    # F6: hour_of_day (0-1)
-    hour = rng.uniform(0, 1, n)
-
-    # F7: is_burst (binary)
-    burst = (rng.random(n) < 0.12).astype(float)
-    # During bursts, increase requests_last_5s
-    req_5s = np.where(burst > 0.5, np.clip(req_5s + 0.4, 0, 1), req_5s)
-
-    X = np.column_stack([payload, cpu_est, endpoint_id, req_5s,
-                         latency, queue, hour, burst])
-
-    # --- Ground-truth label generation ---
-    # Simulate execution_ms from features
-    exec_ms = (
-        50                                    # base
-        + payload * 800                       # payload impact
-        + cpu_est * 400                       # cpu complexity
-        + endpoint_id * 300                   # endpoint type
-        + queue * 100                         # queue pressure
-        + burst * 200                         # burst overhead
-        + rng.normal(0, 30, n)                # noise
-    )
-    exec_ms = np.clip(exec_ms, 10, 2000)
-
-    # Derive class labels from execution_ms
-    y = np.where(exec_ms < 100, 0,       # Light
-         np.where(exec_ms <= 500, 1,      # Medium
-                  2))                      # Heavy
+    X_light, y_light = gen_features(n_light, "Light")
+    X_medium, y_medium = gen_features(n_medium, "Medium")
+    X_heavy, y_heavy = gen_features(n_heavy, "Heavy")
+    
+    X = np.vstack([X_light, X_medium, X_heavy])
+    y = np.concatenate([y_light, y_medium, y_heavy])
+    
+    # Shuffle the dataset
+    indices = np.arange(n)
+    rng.shuffle(indices)
+    X = X[indices]
+    y = y[indices]
 
     print(f"Generated {n} samples")
     print(f"  Class distribution: Light={np.sum(y==0)}, Medium={np.sum(y==1)}, Heavy={np.sum(y==2)}")
-    print(f"  Execution ms range: [{exec_ms.min():.0f}, {exec_ms.max():.0f}]")
-
+    
     return X, y
 
 

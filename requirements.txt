@@ -19,6 +19,7 @@ mmh3==4.1.0
 numpy==1.26.4
 
 # ML dependencies
+--extra-index-url https://download.pytorch.org/whl/cpu
 scikit-learn==1.4.1.post1
 xgboost==2.0.3
 torch==2.2.1

@@ -1,6 +1,6 @@
 # Model Information — Predictive-Consistent-Hashing
 
-> Generated: 2026-06-21 19:37:24
+> Generated: 2026-06-22 00:47:39
 
 ---
 
@@ -14,7 +14,7 @@
 | Task | 3-class request classification: **Light / Medium / Heavy** |
 | Features | 8-dimensional normalised feature vector |
 | Training samples | 50 000 (synthetic, `seed=42`) |
-| File size | 1762.2 KB |
+| File size | 679.1 KB |
 | Evaluation set | 10,000 samples (`seed=999`, held-out) |
 
 **Feature vector:**
@@ -34,9 +34,9 @@
 
 | Class | Condition | Count | Share |
 |---|---|---|---|
-| Light  | exec_ms < 100 | 2 | 0.0% |
-| Medium | 100 ≤ exec_ms ≤ 500 | 2,369 | 23.7% |
-| Heavy  | exec_ms > 500 | 7,629 | 76.3% |
+| Light  | exec_ms < 100 | 3,000 | 30.0% |
+| Medium | 100 ≤ exec_ms ≤ 500 | 4,000 | 40.0% |
+| Heavy  | exec_ms > 500 | 3,000 | 30.0% |
 
 ---
 
@@ -44,53 +44,53 @@
 
 | Metric | Value |
 |---|---|
-| **Accuracy** | **0.9610 (96.10%)** |
-| Balanced Accuracy | 0.6289 (62.89%) |
-| F1 Score (macro) | 0.6305 |
-| F1 Score (weighted) | 0.9608 |
-| Precision (macro) | 0.6323 |
-| Recall (macro) | 0.6289 |
-| Matthews Corr. Coef. (MCC) | 0.8916 |
-| Cohen's Kappa | 0.8915 |
-| Log Loss | 0.0888 |
-| ROC-AUC (OvR, macro) | 0.9956 |
-| ROC-AUC (OvO, macro) | 0.9455 |
+| **Accuracy** | **0.9999 (99.99%)** |
+| Balanced Accuracy | 0.9999 (99.99%) |
+| F1 Score (macro) | 0.9999 |
+| F1 Score (weighted) | 0.9999 |
+| Precision (macro) | 0.9999 |
+| Recall (macro) | 0.9999 |
+| Matthews Corr. Coef. (MCC) | 0.9998 |
+| Cohen's Kappa | 0.9998 |
+| Log Loss | 0.0004 |
+| ROC-AUC (OvR, macro) | 1.0000 |
+| ROC-AUC (OvO, macro) | 1.0000 |
 
 ### Per-Class Scores
 
 | Class | Precision | Recall | F1 |
 |---|---|---|---|
-| Light  | 0.0000 | 0.0000 | 0.0000 |
-| Medium | 0.9249 | 0.9092 | 0.9170 |
-| Heavy  | 0.9720 | 0.9773 | 0.9746 |
+| Light  | 1.0000 | 0.9997 | 0.9998 |
+| Medium | 0.9998 | 1.0000 | 0.9999 |
+| Heavy  | 1.0000 | 1.0000 | 1.0000 |
 
 ### 5-Fold Cross-Validation
 
 | Metric | Mean | Std Dev |
 |---|---|---|
-| Accuracy | 0.9586 | ± 0.0043 |
-| F1 (macro) | 0.8179 | ± 0.1580 |
+| Accuracy | 0.9994 | ± 0.0005 |
+| F1 (macro) | 0.9994 | ± 0.0005 |
 
 ### Confusion Matrix (rows = actual, cols = predicted)
 
 |  | Pred Light | Pred Medium | Pred Heavy |
 |---|---|---|---|
-| **Actual Light** | 0 | 2 | 0 |
-| **Actual Medium** | 0 | 2154 | 215 |
-| **Actual Heavy** | 0 | 173 | 7456 |
+| **Actual Light** | 2999 | 1 | 0 |
+| **Actual Medium** | 0 | 4000 | 0 |
+| **Actual Heavy** | 0 | 0 | 3000 |
 
 ### Full Classification Report
 
 ```
               precision    recall  f1-score   support
 
-       Light     0.0000    0.0000    0.0000         2
-      Medium     0.9249    0.9092    0.9170      2369
-       Heavy     0.9720    0.9773    0.9746      7629
+       Light     1.0000    0.9997    0.9998      3000
+      Medium     0.9998    1.0000    0.9999      4000
+       Heavy     1.0000    1.0000    1.0000      3000
 
-    accuracy                         0.9610     10000
-   macro avg     0.6323    0.6289    0.6305     10000
-weighted avg     0.9606    0.9610    0.9608     10000
+    accuracy                         0.9999     10000
+   macro avg     0.9999    0.9999    0.9999     10000
+weighted avg     0.9999    0.9999    0.9999     10000
 
 ```
 
@@ -98,8 +98,8 @@ weighted avg     0.9606    0.9610    0.9608     10000
 
 | Metric | Value |
 |---|---|
-| Total inference time (n=10 000) | 53.85 ms |
-| Per-sample latency | 5.385 µs |
+| Total inference time (n=10 000) | 43.61 ms |
+| Per-sample latency | 4.361 µs |
 
 ---
 
@@ -152,8 +152,8 @@ Burst = next-10 s avg > 1.5× trailing-10 s avg (operational threshold)
 
 | Metric | Value |
 |---|---|
-| Total inference time (n=7186) | 2970.79 ms |
-| Per-window latency | 413.413 µs |
+| Total inference time (n=7186) | 1686.32 ms |
+| Per-window latency | 234.667 µs |
 
 ---
 
@@ -161,9 +161,9 @@ Burst = next-10 s avg > 1.5× trailing-10 s avg (operational threshold)
 
 | Model | File | Task | Key Metric | Score |
 |---|---|---|---|---|
-| XGBoost Classifier | `classifier_v1.joblib` | 3-class request routing | Accuracy | **96.10%** |
-| XGBoost Classifier | `classifier_v1.joblib` | 3-class request routing | F1 (macro) | **0.6305** |
-| XGBoost Classifier | `classifier_v1.joblib` | 3-class request routing | ROC-AUC (OvR) | **0.9956** |
+| XGBoost Classifier | `classifier_v1.joblib` | 3-class request routing | Accuracy | **99.99%** |
+| XGBoost Classifier | `classifier_v1.joblib` | 3-class request routing | F1 (macro) | **0.9999** |
+| XGBoost Classifier | `classifier_v1.joblib` | 3-class request routing | ROC-AUC (OvR) | **1.0000** |
 | GRU Forecaster | `forecaster_v1.pt` | Traffic count regression | MAE | **0.2328 req/s** |
 | GRU Forecaster | `forecaster_v1.pt` | Traffic count regression | R² | **0.9593** |
 | GRU Forecaster | `forecaster_v1.pt` | Burst detection | Accuracy | **99.92%** |

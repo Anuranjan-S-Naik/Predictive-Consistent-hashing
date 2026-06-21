@@ -221,7 +221,7 @@ services:
   # REDIS — Ring state + live metrics cache
   # ========================================================================
   redis:
-    image: redis:7-alpine
+    image: redis:7
     container_name: paf_redis
     ports:
       - "${REDIS_PORT:-6379}:6379"
@@ -280,7 +280,7 @@ services:
   # INFLUXDB — Time-series metrics
   # ========================================================================
   influxdb:
-    image: influxdb:2.7-alpine
+    image: influxdb:2.7
     container_name: paf_influxdb
     ports:
       - "${INFLUXDB_PORT:-8086}:8086"
@@ -345,7 +345,7 @@ services:
     image: grafana/grafana:10.3.1
     container_name: paf_grafana
     ports:
-      - "${GRAFANA_PORT:-3000}:3000"
+      - "${GRAFANA_PORT:-3001}:3000"
     environment:
       - GF_SECURITY_ADMIN_USER=${GRAFANA_USER:-admin}
       - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_PASSWORD:-admin}
