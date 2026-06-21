@@ -249,6 +249,79 @@ class ConsistentHashRing:
         """Get list of all node names in the ring."""
         return list(self._node_vnodes.keys())
 
+    # ------------------------------------------------------------------
+    # DAA integration methods
+    # ------------------------------------------------------------------
+
+    @property
+    def nodes(self) -> Dict[str, Dict]:
+        """Node info dict for DAA introspection.
+
+        Returns:
+            Dict of node_name -> {capacity_score, base_vnodes, current_vnodes}.
+        """
+        result = {}
+        for name in self._node_vnodes:
+            cap = self._node_capacities.get(name, 100)
+            base = self._compute_vnode_count(cap)
+            result[name] = {
+                "capacity_score": cap,
+                "base_vnodes": base,
+                "current_vnodes": len(self._node_vnodes[name]),
+            }
+        return result
+
+    def get_node_vnode_count(self, node_name: str) -> int:
+        """Get current vnode count for a node (alias for get_vnode_count)."""
+        return self.get_vnode_count(node_name)
+
+    def update_node_vnodes(self, node_name: str, new_count: int):
+        """Dynamically adjust a node's vnode count without full ring rebuild.
+
+        Called by the DAA module to shift traffic by adding or removing vnodes.
+        Preserves existing vnodes where possible to minimize key remapping.
+
+        Args:
+            node_name: Node to adjust.
+            new_count: Desired number of vnodes (will be clamped to min).
+        """
+        if node_name not in self._node_vnodes:
+            logger.warning(f"update_node_vnodes: {node_name} not in ring")
+            return
+
+        new_count = max(new_count, self.vnode_min_count)
+        current_vnodes = self._node_vnodes[node_name]
+        current_count = len(current_vnodes)
+
+        if new_count == current_count:
+            return  # No change needed
+
+        if new_count > current_count:
+            # Add vnodes
+            for i in range(current_count, new_count):
+                vnode_key = f"{node_name}:vnode:{i}"
+                position = murmurhash3(vnode_key)
+                while position in self._position_to_node:
+                    position = murmurhash3(f"{vnode_key}:collision:{position}")
+                self._position_to_node[position] = node_name
+                current_vnodes.append(position)
+                bisect.insort(self._positions, position)
+        else:
+            # Remove vnodes from the end (preserves earlier vnodes for stability)
+            to_remove = current_vnodes[new_count:]
+            self._node_vnodes[node_name] = current_vnodes[:new_count]
+            for position in to_remove:
+                self._position_to_node.pop(position, None)
+                idx = bisect.bisect_left(self._positions, position)
+                if idx < len(self._positions) and self._positions[idx] == position:
+                    self._positions.pop(idx)
+
+        self._last_updated = time.time()
+        logger.debug(
+            f"update_node_vnodes({node_name}): {current_count} → {new_count} "
+            f"(total={len(self._positions)})"
+        )
+
     @property
     def is_empty(self) -> bool:
         return len(self._positions) == 0

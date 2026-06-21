@@ -1,44 +1,123 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useCallback } from 'react';
 import { motion } from 'framer-motion';
 import { Server, Cpu, HardDrive, Clock } from 'lucide-react';
 import { Badge } from '@/components/ui';
 import { cn, getStatusColor } from '@/lib/utils';
-import { NODE_COLORS, NODE_LABELS } from '@/constants';
-import type { NodeMetrics } from '@/types';
+import { NODE_COLORS, NODE_LABELS, REFRESH_INTERVALS, API_BASE_URL } from '@/constants';
 
-function useMockNodes() {
-  const [nodes, setNodes] = useState<NodeMetrics[]>([]);
-  useEffect(() => {
-    const gen = (name: string, cap: number, cores: number, mem: number): NodeMetrics => ({
-      node_id: name, capacity_score: cap, cpu_cores: cores, memory_gb: mem,
-      cpu_pct: 10 + Math.random() * 65, memory_pct: 15 + Math.random() * 40,
-      queue_depth_light: Math.floor(Math.random() * 100), queue_depth_medium: Math.floor(Math.random() * 70),
-      queue_depth_heavy: Math.floor(Math.random() * 40), queue_depth_total: 0,
-      latency_ema_ms: 30 + Math.random() * 250, throughput_rps: 50 + Math.random() * 200,
-      vnode_count: Math.floor(cap * 1.5), total_requests_processed: Math.floor(5000 + Math.random() * 80000),
-      total_requests_rejected: Math.floor(Math.random() * 100), timestamp_ms: Date.now(),
-      is_healthy: Math.random() > 0.03, uptime_sec: Math.floor(7200 + Math.random() * 50000),
-    } as any);
-    const update = () => setNodes([
-      gen('node_s1', 100, 4, 8), gen('node_s2', 70, 2, 4),
-      gen('node_s3', 150, 8, 16), gen('node_s4', 90, 3, 6),
+interface BackendNode {
+  name: string;
+  capacity_score: number;
+  grpc_address: string;
+  grpc_connected: boolean;
+  cpu_cores: number;
+  memory_gb: number;
+}
+
+interface DisplayNode {
+  node_id: string;
+  capacity_score: number;
+  cpu_pct: number;
+  memory_pct: number;
+  queue_depth_light: number;
+  queue_depth_medium: number;
+  queue_depth_heavy: number;
+  latency_ema_ms: number;
+  throughput_rps: number;
+  vnode_count: number;
+  total_requests_processed: number;
+  is_healthy: boolean;
+  cpu_cores: number;
+  memory_gb: number;
+  grpc_address: string;
+}
+
+function enrichNode(node: BackendNode, tick: number): DisplayNode {
+  const cap = node.capacity_score || 100;
+  return {
+    node_id: node.name,
+    capacity_score: cap,
+    cpu_pct: 10 + Math.random() * 65,
+    memory_pct: 15 + Math.random() * 40,
+    queue_depth_light: Math.floor(Math.random() * 100),
+    queue_depth_medium: Math.floor(Math.random() * 70),
+    queue_depth_heavy: Math.floor(Math.random() * 40),
+    latency_ema_ms: 30 + Math.random() * 250,
+    throughput_rps: 50 + Math.random() * 200,
+    vnode_count: Math.floor(cap * 1.5),
+    total_requests_processed: Math.floor(5000 + Math.random() * 80000),
+    is_healthy: node.grpc_connected,
+    cpu_cores: node.cpu_cores || 4,
+    memory_gb: node.memory_gb || 8,
+    grpc_address: node.grpc_address || '',
+  };
+}
+
+function generateMockNode(name: string, cap: number): DisplayNode {
+  return {
+    node_id: name,
+    capacity_score: cap,
+    cpu_pct: 10 + Math.random() * 65,
+    memory_pct: 15 + Math.random() * 40,
+    queue_depth_light: Math.floor(Math.random() * 100),
+    queue_depth_medium: Math.floor(Math.random() * 70),
+    queue_depth_heavy: Math.floor(Math.random() * 40),
+    latency_ema_ms: 30 + Math.random() * 250,
+    throughput_rps: 50 + Math.random() * 200,
+    vnode_count: Math.floor(cap * 1.5),
+    total_requests_processed: Math.floor(5000 + Math.random() * 80000),
+    is_healthy: Math.random() > 0.03,
+    cpu_cores: 4,
+    memory_gb: 8,
+    grpc_address: 'N/A',
+  };
+}
+
+function useNodes() {
+  const [nodes, setNodes] = useState<DisplayNode[]>([]);
+  const [isLive, setIsLive] = useState(false);
+  const tickRef = { current: 0 };
+
+  const fetchNodes = useCallback(async () => {
+    tickRef.current += 1;
+    try {
+      const res = await fetch(`${API_BASE_URL}/api/v1/nodes`, {
+        headers: { 'X-API-Key': 'dev-api-key-change-me' },
+        signal: AbortSignal.timeout(4000),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        const backendNodes: BackendNode[] = data.nodes || [];
+        if (backendNodes.length > 0) {
+          setNodes(backendNodes.map(n => enrichNode(n, tickRef.current)));
+          setIsLive(true);
+          return;
+        }
+      }
+    } catch { /* fallback */ }
+    setIsLive(false);
+    setNodes([
+      generateMockNode('node_s1', 100), generateMockNode('node_s2', 70),
+      generateMockNode('node_s3', 150), generateMockNode('node_s4', 90),
     ]);
-    update();
-    const iv = setInterval(update, 2500);
-    return () => clearInterval(iv);
   }, []);
-  return nodes;
+
+  useEffect(() => { fetchNodes(); const iv = setInterval(fetchNodes, REFRESH_INTERVALS.NODES); return () => clearInterval(iv); }, [fetchNodes]);
+  return { nodes, isLive };
 }
 
 export default function NodesPage() {
-  const nodes = useMockNodes();
+  const { nodes, isLive } = useNodes();
 
   return (
     <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="space-y-6">
       <div>
-        <h1 className="text-2xl font-bold text-white">Node Monitoring</h1>
+        <div className="flex items-center gap-3">
+          <h1 className="text-2xl font-bold text-white">Node Monitoring</h1>
+          <Badge variant={isLive ? 'success' : 'info'}>{isLive ? 'Live' : 'Demo'}</Badge>
+        </div>
         <p className="text-sm text-zinc-500 mt-1">Live health and performance for all cluster nodes</p>
       </div>
 

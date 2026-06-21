@@ -1,30 +1,18 @@
 'use client';
 
 import { usePathname } from 'next/navigation';
-import { Bell, Search, ChevronRight } from 'lucide-react';
-import { useAlertStore } from '@/stores';
+import { ChevronRight } from 'lucide-react';
 
 const PAGE_TITLES: Record<string, string> = {
   '/': 'Dashboard',
-  '/simulation': 'Simulation Control',
   '/nodes': 'Node Monitoring',
-  '/traffic': 'Traffic Generator',
   '/routing': 'Routing Engine',
-  '/routing/chord': 'Chord DHT Routing',
-  '/routing/queues': 'WFQ Scheduler',
-  '/metrics': 'System Metrics',
-  '/forecasting': 'Traffic Forecasting',
-  '/benchmarks': 'Benchmark Analysis',
-  '/experiments': 'Experiment Runner',
-  '/alerts': 'Alert Center',
-  '/logs': 'Request Logs',
-  '/failures': 'Failure Injection',
+  '/simulation': 'Simulation Control',
   '/settings': 'Settings',
 };
 
 export function TopBar() {
   const pathname = usePathname();
-  const alertCount = useAlertStore((s) => s.alerts.filter((a) => !a.acknowledged).length);
   const title = PAGE_TITLES[pathname] || 'PCH Console';
 
   const crumbs = pathname.split('/').filter(Boolean);
@@ -50,21 +38,11 @@ export function TopBar() {
         )}
       </div>
 
-      {/* Right side */}
+      {/* Right side — clean branding */}
       <div className="flex items-center gap-3">
-        <button className="p-2 rounded-lg hover:bg-white/[0.04] text-zinc-500 hover:text-zinc-300 transition-colors">
-          <Search className="w-4 h-4" />
-        </button>
-        <button className="relative p-2 rounded-lg hover:bg-white/[0.04] text-zinc-500 hover:text-zinc-300 transition-colors">
-          <Bell className="w-4 h-4" />
-          {alertCount > 0 && (
-            <span className="absolute -top-0.5 -right-0.5 w-4 h-4 rounded-full bg-rose-500 text-white text-[9px] font-bold flex items-center justify-center animate-pulse">
-              {alertCount > 9 ? '9+' : alertCount}
-            </span>
-          )}
-        </button>
+        <span className="text-xs text-zinc-600 font-mono">Predictive Consistent Hashing</span>
         <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-brand-600 to-brand-400 flex items-center justify-center text-white text-xs font-bold">
-          A
+          P
         </div>
       </div>
     </header>
