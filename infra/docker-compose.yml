@@ -377,7 +377,7 @@ services:
     container_name: paf_traffic_generator
     environment:
       - COORDINATOR_URL=http://coordinator:8000/api/v1/request
-      - SCENARIO_FILE=/app/scenarios/${SCENARIO:-uniform.yaml}
+      - SCENARIO_FILE=/app/scenarios/${SCENARIO:-active.yaml}
       - API_KEY=${API_KEY:-dev-api-key-change-me}
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
       - CONFIG_PATH=/app/config.yaml

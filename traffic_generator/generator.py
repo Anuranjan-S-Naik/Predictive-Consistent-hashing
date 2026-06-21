@@ -66,6 +66,7 @@ async def send_request(
     endpoint: dict,
     source_id: str,
     experiment_id: str,
+    chosen_class: str = None,
 ) -> dict:
     """Send a single request to the coordinator."""
     payload = {
@@ -78,6 +79,8 @@ async def send_request(
         "source_id": source_id,
         "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S.000Z"),
     }
+    if chosen_class:
+        payload["class"] = chosen_class
 
     headers = {"X-API-Key": API_KEY, "Content-Type": "application/json"}
 
@@ -121,8 +124,9 @@ async def generate_uniform(scenario: dict, session: aiohttp.ClientSession):
 
         source_id = f"{prefix}{random.randint(0, source_count - 1)}"
         endpoint = pick_endpoint(endpoints)
+        chosen_class = pick_class(class_dist)
 
-        asyncio.create_task(send_request(session, COORDINATOR_URL, endpoint, source_id, experiment_id))
+        asyncio.create_task(send_request(session, COORDINATOR_URL, endpoint, source_id, experiment_id, chosen_class))
         total_sent += 1
 
         if total_sent % 500 == 0:
@@ -177,8 +181,9 @@ async def generate_bursty(scenario: dict, session: aiohttp.ClientSession):
         interval = 1.0 / max(current_rps, 1)
         source_id = f"{prefix}{random.randint(0, source_count - 1)}"
         endpoint = pick_endpoint(endpoints)
+        chosen_class = pick_class(class_dist)
 
-        asyncio.create_task(send_request(session, COORDINATOR_URL, endpoint, source_id, experiment_id))
+        asyncio.create_task(send_request(session, COORDINATOR_URL, endpoint, source_id, experiment_id, chosen_class))
         total_sent += 1
 
         if total_sent % 500 == 0:
@@ -195,12 +200,14 @@ async def generate_flash_crowd(scenario: dict, session: aiohttp.ClientSession):
     traffic = scenario["traffic"]
     base_rps = traffic["rps"]
     duration = traffic["duration_seconds"]
+    base_dist = traffic.get("class_distribution", {"light": 0.50, "medium": 0.35, "heavy": 0.15})
     pattern = traffic.get("pattern", {})
     surge_start = pattern.get("surge_start_sec", 60)
     surge_duration = pattern.get("surge_duration_sec", 30)
     surge_multiplier = pattern.get("surge_rps_multiplier", 10.0)
     surge_ramp_up = pattern.get("surge_ramp_up_sec", 2)
     surge_ramp_down = pattern.get("surge_ramp_down_sec", 10)
+    surge_dist = pattern.get("surge_class_distribution", {"light": 0.45, "medium": 0.35, "heavy": 0.20})
     endpoints = traffic.get("endpoints", [])
     source_count = traffic.get("source_ids", {}).get("count", 200)
     prefix = traffic.get("source_ids", {}).get("prefix", "user_")
@@ -232,7 +239,12 @@ async def generate_flash_crowd(scenario: dict, session: aiohttp.ClientSession):
         source_id = f"{prefix}{random.randint(0, source_count - 1)}"
         endpoint = pick_endpoint(endpoints)
 
-        asyncio.create_task(send_request(session, COORDINATOR_URL, endpoint, source_id, experiment_id))
+        # Use surge class distribution if we are actively in or transitioning to/from the surge
+        in_surge = surge_start <= elapsed < (surge_end + surge_ramp_down)
+        class_dist = surge_dist if in_surge else base_dist
+        chosen_class = pick_class(class_dist)
+
+        asyncio.create_task(send_request(session, COORDINATOR_URL, endpoint, source_id, experiment_id, chosen_class))
         total_sent += 1
 
         if total_sent % 500 == 0:
@@ -253,6 +265,7 @@ async def generate_random(scenario: dict, session: aiohttp.ClientSession):
     rps_max = pattern.get("rps_range", {}).get("max", 500)
     phase_dur = pattern.get("phase_duration_sec", 15)
     micro = pattern.get("micro_burst", {})
+    class_dist = traffic.get("class_distribution", {"light": 0.40, "medium": 0.35, "heavy": 0.25})
     endpoints = traffic.get("endpoints", [])
     source_count = traffic.get("source_ids", {}).get("count", 100)
     prefix = traffic.get("source_ids", {}).get("prefix", "user_")
@@ -275,11 +288,33 @@ async def generate_random(scenario: dict, session: aiohttp.ClientSession):
             if micro.get("enabled") and random.random() < micro.get("probability_per_phase", 0.4):
                 logger.info(f"  MICRO-BURST at {now-start_time:.0f}s ({current_rps * micro.get('rps_multiplier', 2.5):.0f} RPS)")
 
+            # Randomly shift class distribution if ranges are provided
+            ranges = pattern.get("class_distribution_ranges", {})
+            if ranges:
+                l_min = ranges.get("light", {}).get("min", 0.20)
+                l_max = ranges.get("light", {}).get("max", 0.60)
+                m_min = ranges.get("medium", {}).get("min", 0.20)
+                m_max = ranges.get("medium", {}).get("max", 0.50)
+                h_min = ranges.get("heavy", {}).get("min", 0.10)
+                h_max = ranges.get("heavy", {}).get("max", 0.40)
+
+                l_val = random.uniform(l_min, l_max)
+                m_val = random.uniform(m_min, m_max)
+                h_val = random.uniform(h_min, h_max)
+
+                total = l_val + m_val + h_val
+                class_dist = {
+                    "light": l_val / total,
+                    "medium": m_val / total,
+                    "heavy": h_val / total
+                }
+
         interval = 1.0 / max(current_rps, 1)
         source_id = f"{prefix}{random.randint(0, source_count - 1)}"
         endpoint = pick_endpoint(endpoints)
+        chosen_class = pick_class(class_dist)
 
-        asyncio.create_task(send_request(session, COORDINATOR_URL, endpoint, source_id, experiment_id))
+        asyncio.create_task(send_request(session, COORDINATOR_URL, endpoint, source_id, experiment_id, chosen_class))
         total_sent += 1
 
         if total_sent % 500 == 0:
@@ -287,7 +322,50 @@ async def generate_random(scenario: dict, session: aiohttp.ClientSession):
 
         await asyncio.sleep(interval)
 
-    logger.info(f"RANDOM scenario complete: {total_sent} requests in {time.time()-start_time:.1f}s")
+async def generate_fixed_cycle(scenario: dict, session: aiohttp.ClientSession):
+    """Fixed 10-second cycle: 0-2s Light, 2-7s Medium, 7-10s Heavy."""
+    traffic = scenario["traffic"]
+    base_rps = traffic["rps"]
+    duration = traffic["duration_seconds"]
+    source_count = traffic.get("source_ids", {}).get("count", 100)
+    prefix = traffic.get("source_ids", {}).get("prefix", "user_")
+
+    experiment_id = f"fixed_cycle_{int(time.time())}"
+    logger.info(f"Starting FIXED CYCLE scenario: 10s loop ({base_rps} RPS) for {duration}s")
+
+    endpoints = {
+        "Light": {"path": "/api/status", "method": "GET", "avg_payload_bytes": 128},
+        "Medium": {"path": "/api/data", "method": "GET", "avg_payload_bytes": 4000},
+        "Heavy": {"path": "/api/inference", "method": "POST", "avg_payload_bytes": 20000},
+    }
+
+    start_time = time.time()
+    total_sent = 0
+
+    while (time.time() - start_time) < duration:
+        elapsed = time.time() - start_time
+        cycle_sec = elapsed % 10.0
+
+        if cycle_sec < 2.0:
+            current_class = "Light"
+        elif cycle_sec < 7.0:
+            current_class = "Medium"
+        else:
+            current_class = "Heavy"
+
+        interval = 1.0 / max(base_rps, 1)
+        source_id = f"{prefix}{random.randint(0, source_count - 1)}"
+        endpoint = endpoints[current_class]
+
+        asyncio.create_task(send_request(session, COORDINATOR_URL, endpoint, source_id, experiment_id, current_class))
+        total_sent += 1
+
+        if total_sent % 100 == 0:
+            logger.info(f"  Sent {total_sent} ({elapsed:.1f}s, Phase: {current_class})")
+
+        await asyncio.sleep(interval)
+
+    logger.info(f"FIXED CYCLE scenario complete: {total_sent} requests in {time.time()-start_time:.1f}s")
 
 
 # Pattern type → generator function mapping
@@ -296,6 +374,7 @@ GENERATORS = {
     "poisson_burst": generate_bursty,
     "flash_crowd": generate_flash_crowd,
     "random_mixed": generate_random,
+    "fixed_cycle": generate_fixed_cycle,
 }
 
 

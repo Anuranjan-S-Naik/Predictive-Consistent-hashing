@@ -7,7 +7,7 @@ const PAGE_TITLES: Record<string, string> = {
   '/': 'Dashboard',
   '/nodes': 'Node Monitoring',
   '/routing': 'Routing Engine',
-  '/simulation': 'Simulation Control',
+  '/simulation': 'Live Ring & Simulation',
   '/settings': 'Settings',
 };
 

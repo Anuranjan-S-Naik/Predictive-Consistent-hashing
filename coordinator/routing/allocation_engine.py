@@ -47,6 +47,9 @@ class AllocationEngine:
 
         # Cached node metrics: node_name -> metrics dict
         self._node_metrics: Dict[str, Dict] = {}
+        # Local inflight tracker: node_name -> float (simulated active heavy/medium requests)
+        self._local_inflight: Dict[str, float] = {}
+        self._last_inflight_update = time.time()
 
         logger.info(
             f"AllocationEngine initialized: α={self.alpha}, β={self.beta}, "
@@ -63,27 +66,43 @@ class AllocationEngine:
         """
         metrics["_updated_at"] = time.time()
         self._node_metrics[node_name] = metrics
+        # Periodically reset local inflight when real metrics arrive to prevent drift
+        self._local_inflight[node_name] = 0.0
 
-    def compute_score(self, node_name: str, predicted_load: float = 0.0) -> float:
-        """Compute the allocation score for a single node.
+    def compute_score(self, node_name: str, predicted_load: float = 0.0, request_class: str = "Medium") -> float:
+        """Compute the weighted allocation score for a node.
 
         Args:
-            node_name: Node to score.
-            predicted_load: Forecaster's predicted incoming load (0.0 until Phase 5).
+            node_name: Node identifier.
+            predicted_load: Phase 5 predicted future load for the node (default 0).
+            request_class: The classification of the incoming request.
 
         Returns:
-            Score in [0, 1+] where lower is better.
+            Float score [0.0 - 1.0+]. Lower is better.
         """
         metrics = self._node_metrics.get(node_name)
-        if metrics is None:
-            return 1.0  # No data → worst score
+        if not metrics:
+            # Fallback score if node metrics are missing
+            return 0.99
+
+        # Decay local inflight based on elapsed time (assumes ~100ms per request completion)
+        now = time.time()
+        elapsed = now - self._last_inflight_update
+        if elapsed > 0.1:
+            decay_factor = max(0.0, 1.0 - (elapsed * 5.0))
+            for k in self._local_inflight:
+                self._local_inflight[k] *= decay_factor
+            self._last_inflight_update = now
+
+        # Add immediate class-based weight to queue depth
+        local_q = self._local_inflight.get(node_name, 0.0)
 
         # Normalize CPU to [0, 1]
         cpu_norm = min(metrics.get("cpu_pct", 50.0) / 100.0, 1.0)
 
-        # Normalize queue depth to [0, 1]
-        queue_depth = metrics.get("queue_depth", 0)
-        queue_max = metrics.get("queue_max", 450)  # Sum of all class max depths
+        # Normalize queue depth (including our instantaneous local tracker)
+        queue_depth = metrics.get("queue_depth", 0) + local_q
+        queue_max = metrics.get("queue_max", 450)
         queue_norm = min(queue_depth / max(queue_max, 1), 1.0)
 
         # Normalize latency EMA to [0, 1]
@@ -91,10 +110,10 @@ class AllocationEngine:
         latency_max = metrics.get("latency_max_ms", 5000.0)
         latency_norm = min(latency_ms / max(latency_max, 1), 1.0)
 
-        # Predicted load (0 until Phase 5 GRU integration)
+        # Predicted load
         load_norm = min(predicted_load, 1.0)
 
-        # Staleness penalty: if metrics are old, add penalty
+        # Staleness penalty
         age = time.time() - metrics.get("_updated_at", time.time())
         staleness = min(age * self.staleness_penalty, 0.5) if age > 10 else 0.0
 
@@ -112,12 +131,14 @@ class AllocationEngine:
         self,
         candidates: List[str],
         predicted_loads: Optional[Dict[str, float]] = None,
+        request_class: str = "Medium"
     ) -> Tuple[Optional[str], float, bool]:
         """Select the best node from candidates based on scores.
 
         Args:
             candidates: List of candidate node names (from hash ring lookup).
             predicted_loads: Optional dict of node_name -> predicted_load (Phase 5).
+            request_class: The classification of the incoming request.
 
         Returns:
             Tuple of (selected_node, score, is_overloaded).
@@ -131,14 +152,18 @@ class AllocationEngine:
         scores = {}
         for node in candidates:
             pred = predicted_loads.get(node, 0.0)
-            scores[node] = self.compute_score(node, pred)
+            scores[node] = self.compute_score(node, pred, request_class)
 
         # Select minimum-score node
         best_node = min(scores, key=scores.get)
         best_score = scores[best_node]
 
+        # Add to local inflight tracker immediately
+        cost = {"Light": 1.0, "Medium": 5.0, "Heavy": 20.0}.get(request_class, 5.0)
+        self._local_inflight[best_node] = self._local_inflight.get(best_node, 0.0) + cost
+
         # Check overflow: all candidates above threshold
-        all_overloaded = all(s > self.overflow_threshold for s in scores.values())
+        all_overloaded = all(s >= self.overflow_threshold for s in scores.values())
 
         if all_overloaded:
             logger.warning(
@@ -179,4 +204,8 @@ class AllocationEngine:
             Dict of node_name -> metrics dict.
         """
         return {name: dict(m) for name, m in self._node_metrics.items()}
+
+    def reset(self):
+        """Clear cached metrics for all nodes."""
+        self._node_metrics.clear()
 

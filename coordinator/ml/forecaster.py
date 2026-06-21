@@ -181,17 +181,23 @@ class TrafficForecaster:
         else:
             prediction = self._gru_predict(window)
 
-        self._last_prediction = prediction
-        self._last_prediction_time = time.time()
-
-        # Detect burst
+        # Detect burst and damp prediction if needed
         if len(window) > 10:
             current_avg = float(np.mean(window[-10:]))
         else:
             current_avg = float(np.mean(window)) if window else 1.0
 
+        # Damp prediction if system is completely idle to avoid baseline hallucination
+        if current_avg < 0.1:
+            prediction = 0.0
+
+        self._last_prediction = prediction
+        self._last_prediction_time = time.time()
+
         old_burst = self._burst_imminent
-        self._burst_imminent = prediction > self.burst_multiplier * max(current_avg, 0.1)
+        # Require an absolute minimum of 5.0 heavy requests/sec to call it a "burst"
+        # Otherwise, tiny noise on a 0-request idle system triggers false positives
+        self._burst_imminent = (prediction > 5.0) and (prediction > self.burst_multiplier * max(current_avg, 1.0))
 
         # Notify DAA of burst state change
         if old_burst != self._burst_imminent and self.daa_engine:

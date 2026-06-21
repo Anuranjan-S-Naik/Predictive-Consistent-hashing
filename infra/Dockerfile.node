@@ -16,6 +16,8 @@ RUN pip install --no-cache-dir grpcio==1.62.0 protobuf==4.25.3 \
 
 # Copy application code
 COPY node/ /app/node/
+COPY coordinator/grpc/ /app/coordinator/grpc/
+RUN touch /app/coordinator/__init__.py
 COPY config.yaml /app/config.yaml
 
 # Expose ports: gRPC (dynamic) + Prometheus metrics (9100)

@@ -34,7 +34,7 @@ export const ALLOCATION_MODES = [
 ] as const;
 
 export const REFRESH_INTERVALS = {
-  METRICS: 2000,
+  METRICS: 1000,
   NODES: 3000,
   RING: 5000,
   FORECAST: 5000,

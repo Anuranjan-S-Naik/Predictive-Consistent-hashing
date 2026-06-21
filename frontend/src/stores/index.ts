@@ -85,3 +85,22 @@ export const useWsStore = create<WsState>((set) => ({
   setConnected: (connected) => set({ connected }),
   setPing: (lastPing) => set({ lastPing }),
 }));
+
+// --- Flow Store (global, persists across page navigation) ---
+interface FlowState {
+  isFlowRunning: boolean;
+  selectedFlow: 'light-medium' | 'medium-high';
+  isUpdatingFlow: boolean;
+  setFlowRunning: (running: boolean) => void;
+  setSelectedFlow: (flow: 'light-medium' | 'medium-high') => void;
+  setUpdatingFlow: (updating: boolean) => void;
+}
+
+export const useFlowStore = create<FlowState>((set) => ({
+  isFlowRunning: false,
+  selectedFlow: 'light-medium',
+  isUpdatingFlow: false,
+  setFlowRunning: (isFlowRunning) => set({ isFlowRunning }),
+  setSelectedFlow: (selectedFlow) => set({ selectedFlow }),
+  setUpdatingFlow: (isUpdatingFlow) => set({ isUpdatingFlow }),
+}));

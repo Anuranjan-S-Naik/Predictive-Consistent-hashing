@@ -91,7 +91,7 @@ def add_CoordinatorNodeServiceServicer_to_server(servicer, server):
             response_serializer=lambda m: pickle.dumps(m.__dict__),
         ),
     }
-    generic_handler = grpc.method_service_handler(
+    generic_handler = grpc.method_handlers_generic_handler(
         'paf.CoordinatorNodeService', rpc_method_handlers,
     )
     server.add_generic_rpc_handlers((generic_handler,))

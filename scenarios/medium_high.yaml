@@ -1,0 +1,42 @@
+# ============================================================================
+# SCENARIO: Medium-High Traffic
+# ============================================================================
+# Constant-rate traffic with a mix of Medium and Heavy requests (No Light).
+# ============================================================================
+
+scenario:
+  name: "medium_high"
+  description: "Mix of Medium and Heavy flows"
+  version: "1.0"
+
+traffic:
+  rps: 120
+  duration_seconds: 1800
+  ramp_up_seconds: 2
+
+  class_distribution:
+    light: 0.00     # GET API calls, ~50 ms execution
+    medium: 0.60    # DB queries, ~200 ms execution
+    heavy: 0.40     # ML inference / batch ops, ~1000 ms execution
+
+  pattern:
+    type: "constant"
+    jitter_pct: 5
+
+  endpoints:
+    - path: "/api/data"
+      method: "POST"
+      weight: 0.40
+      avg_payload_bytes: 4096
+    - path: "/api/inference"
+      method: "POST"
+      weight: 0.40
+      avg_payload_bytes: 16384
+    - path: "/api/batch"
+      method: "POST"
+      weight: 0.20
+      avg_payload_bytes: 65536
+
+  source_ids:
+    count: 50
+    prefix: "user_"

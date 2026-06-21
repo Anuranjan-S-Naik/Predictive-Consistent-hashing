@@ -14,6 +14,7 @@ Wires the full request pipeline:
 
 import logging
 import time
+import collections
 from typing import Dict, Optional
 
 logger = logging.getLogger("coordinator.intake.router")
@@ -64,6 +65,12 @@ class RequestRouter:
 
         # Request counter for ID generation
         self._counter = 0
+        
+        # Buffers for live UI log and server-side dashboard aggregates.
+        self.recent_requests = collections.deque(maxlen=1000)
+        self._request_events = collections.deque(maxlen=5000)
+        self.total_requests_handled = 0
+        self._last_timestamp = time.time()
 
     async def route_request(self, raw_request: dict) -> dict:
         """Process a raw request through the full pipeline.
@@ -94,13 +101,22 @@ class RequestRouter:
             queue_depth=0,  # Will be populated from live metrics
         )
 
-        # Step 2: Classification — ML if available, else heuristic
-        if self.classifier and self.classifier.is_loaded:
-            predicted_class, confidence = self.classifier.classify(feature_vector)
-            classification_method = "xgboost"
+        # Step 2: Classification — forced if provided, else ML / heuristic fallback
+        forced_class = raw_request.get("class")
+        if forced_class:
+            forced_class = forced_class.capitalize()
+
+        if forced_class in ("Light", "Medium", "Heavy"):
+            predicted_class = forced_class
+            confidence = 1.0
+            classification_method = "forced"
         else:
-            predicted_class, confidence = heuristic_classify(endpoint, payload_bytes, method)
-            classification_method = "heuristic"
+            if self.classifier and self.classifier.is_loaded:
+                predicted_class, confidence = self.classifier.classify(feature_vector)
+                classification_method = "xgboost"
+            else:
+                predicted_class, confidence = heuristic_classify(endpoint, payload_bytes, method)
+                classification_method = "heuristic"
 
         # Notify forecaster of heavy requests
         if predicted_class == "Heavy" and self.forecaster:
@@ -128,7 +144,7 @@ class RequestRouter:
 
         # Step 5: Score-based selection (now with δ·predicted_load)
         selected_node, score, all_overloaded = self.engine.select_node(
-            candidates, predicted_loads=predicted_loads
+            candidates, predicted_loads=predicted_loads, request_class=predicted_class
         )
         routing_hops = 1
         routing_method = "allocation_engine"
@@ -147,17 +163,72 @@ class RequestRouter:
 
         elapsed_ms = (time.perf_counter() - start_time) * 1000
 
-        return {
+        now = time.time()
+        if now <= self._last_timestamp:
+            now = self._last_timestamp + 0.001
+        self._last_timestamp = now
+
+        result = {
             "request_id": request_id,
             "predicted_class": predicted_class,
-            "confidence": confidence,
-            "classification_method": classification_method,
+            "confidence": round(confidence, 3),
             "assigned_node": selected_node,
             "routing_hops": routing_hops,
             "allocation_score": round(score, 4),
             "routing_method": routing_method,
-            "feature_vector": [round(f, 4) for f in feature_vector],
-            "predicted_load": predicted_loads.get(selected_node, 0.0),
-            "pipeline_latency_ms": round(elapsed_ms, 3),
-            "status": "routed",
+            "feature_vector": feature_vector,
+            "elapsed_ms": round(elapsed_ms, 2),
+            "timestamp": now,
+        }
+
+        self.recent_requests.appendleft(result)
+        self._record_request_event(result)
+        return result
+
+    def _record_request_event(self, result: dict):
+        self.total_requests_handled += 1
+        self._request_events.append({
+            "timestamp": result.get("timestamp", time.time()),
+            "elapsed_ms": result.get("elapsed_ms", 0.0),
+            "predicted_class": result.get("predicted_class", "Medium"),
+            "assigned_node": result.get("assigned_node"),
+        })
+
+    def get_dashboard_metrics(self, node_metrics: Optional[Dict[str, Dict]] = None) -> Dict:
+        """Return aggregate metrics for the overview cards.
+
+        These are derived from real coordinator request events and live node
+        metrics. The frontend does not synthesize or smooth these values.
+        """
+        now = time.time()
+        events = list(self._request_events)
+        last_second = [e for e in events if now - e["timestamp"] <= 1.0]
+        latency_window = [e for e in events if now - e["timestamp"] <= 5.0]
+        if len(latency_window) > 100:
+            latency_window = latency_window[-100:]
+
+        node_metrics = node_metrics or {}
+        cpu_values = [
+            float(metrics.get("cpu_pct", 0.0))
+            for metrics in node_metrics.values()
+            if metrics is not None
+        ]
+        latency_values = [
+            float(metrics.get("latency_ema_ms", 0.0))
+            for metrics in node_metrics.values()
+            if metrics is not None
+        ]
+
+        avg_latency = sum(latency_values) / len(latency_values) if latency_values else 0.0
+        avg_cpu = sum(cpu_values) / len(cpu_values) if cpu_values else 0.0
+
+        return {
+            "throughput_rps": len(last_second),
+            "avg_cpu_pct": round(avg_cpu, 3),
+            "avg_latency_ms": round(avg_latency, 3),
+            "total_processed": self.total_requests_handled,
+            "window_seconds": 1,
+            "latency_window_count": len(latency_window),
+            "active_nodes": len(cpu_values),
+            "timestamp": now,
         }

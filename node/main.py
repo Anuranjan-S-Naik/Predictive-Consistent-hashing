@@ -20,6 +20,7 @@ from concurrent import futures
 
 import grpc
 import yaml
+from coordinator.grpc import coordinator_pb2, coordinator_pb2_grpc
 from prometheus_client import (
     Counter,
     Gauge,
@@ -152,6 +153,20 @@ class NodeState:
         self.total_rejected: int = 0
         self.is_healthy: bool = True
 
+    def reset(self):
+        """Reset all runtime state metrics."""
+        self.cpu_pct = 5.0
+        self.memory_pct = 10.0
+        self.queue_depth_light = 0
+        self.queue_depth_medium = 0
+        self.queue_depth_heavy = 0
+        self.latency_ema_ms = 0.0
+        self.throughput_rps = 0.0
+        self.total_processed = 0
+        self.total_rejected = 0
+        self.is_healthy = True
+        self.start_time = time.time()
+
     @property
     def queue_depth_total(self) -> int:
         return self.queue_depth_light + self.queue_depth_medium + self.queue_depth_heavy
@@ -209,32 +224,30 @@ executor: RequestExecutor = None  # Initialized in main()
 # ---------------------------------------------------------------------------
 
 
-class NodeServicer:
-    """gRPC service implementation for the simulated node.
+class NodeServicer(coordinator_pb2_grpc.CoordinatorNodeServiceServicer):
+    """gRPC service implementation for the simulated node."""
 
-    Phase 3: Enqueues requests into WFQ scheduler for weighted execution.
-    """
-
-    async def RouteRequest(self, request_data: dict) -> dict:
+    async def RouteRequest(self, request, context):
         """Accept a request from the coordinator and enqueue into WFQ."""
-        request_id = request_data.get("request_id", "unknown")
-        request_class = request_data.get("request_class", "Medium")
+        request_id = request.request_id
 
-        # Map integer class to string if needed
+        # Map enum values to scheduler class names. Keep string handling as a
+        # defensive bridge for older coordinators using the manual stubs.
         class_map = {1: "Light", 2: "Medium", 3: "Heavy"}
-        if isinstance(request_class, int):
-            request_class = class_map.get(request_class, "Medium")
+        raw_class = request.request_class
+        request_class = raw_class if raw_class in {"Light", "Medium", "Heavy"} else class_map.get(raw_class, "Medium")
+
+        payload = dict(getattr(request, "__dict__", {}))
 
         # Create queued request and enqueue
         queued = QueuedRequest(
             request_id=request_id,
             request_class=request_class,
-            payload=request_data,
+            payload=payload,
         )
         accepted = await scheduler.enqueue(queued)
 
         if accepted:
-            # Update queue depth metrics from scheduler
             depths = scheduler.get_queue_depths()
             node_state.queue_depth_light = depths.get("Light", 0)
             node_state.queue_depth_medium = depths.get("Medium", 0)
@@ -243,25 +256,51 @@ class NodeServicer:
             node_state.total_rejected += 1
             NODE_REQUESTS_REJECTED.labels(node=NODE_NAME).inc()
 
-        return {
-            "accepted": accepted,
-            "node_id": NODE_NAME,
-            "current_queue_depth": scheduler.total_depth,
-            "rejection_reason": "" if accepted else "queue_full",
-        }
+        return coordinator_pb2.RouteRequestResponse(
+            accepted=accepted,
+            node_id=NODE_NAME,
+            current_queue_depth=scheduler.total_depth,
+            rejection_reason="" if accepted else "queue_full"
+        )
 
-    async def GetNodeMetrics(self, request_data: dict) -> dict:
+    async def GetNodeMetrics(self, request, context):
         """Return current node metrics."""
-        return node_state.to_dict()
+        return coordinator_pb2.NodeMetricsResponse(
+            node_id=node_state.name,
+            cpu_pct=node_state.cpu_pct,
+            memory_pct=node_state.memory_pct,
+            queue_depth_light=node_state.queue_depth_light,
+            queue_depth_medium=node_state.queue_depth_medium,
+            queue_depth_heavy=node_state.queue_depth_heavy,
+            queue_depth_total=node_state.queue_depth_total,
+            latency_ema_ms=node_state.latency_ema_ms,
+            throughput_rps=node_state.throughput_rps,
+            capacity_score=node_state.capacity_score,
+            vnode_count=node_state.vnode_count,
+            total_requests_processed=node_state.total_processed,
+            total_requests_rejected=node_state.total_rejected,
+            timestamp_ms=int(time.time() * 1000),
+            is_healthy=node_state.is_healthy,
+            uptime_sec=node_state.uptime_sec,
+        )
 
-    async def HealthCheck(self, request_data: dict) -> dict:
+    async def HealthCheck(self, request, context):
         """Respond to health check."""
-        return {
-            "node_id": NODE_NAME,
-            "healthy": node_state.is_healthy,
-            "uptime_sec": node_state.uptime_sec,
-            "timestamp_ms": int(time.time() * 1000),
-        }
+        return coordinator_pb2.HealthCheckResponse(
+            status="healthy" if node_state.is_healthy else "unhealthy",
+            node_id=NODE_NAME,
+            uptime_sec=node_state.uptime_sec,
+            timestamp_ms=int(time.time() * 1000)
+        )
+
+async def serve_grpc(port: int):
+    """Start the gRPC server."""
+    server = grpc.aio.server()
+    coordinator_pb2_grpc.add_CoordinatorNodeServiceServicer_to_server(NodeServicer(), server)
+    server.add_insecure_port(f"[::]:{port}")
+    await server.start()
+    logger.info(f"gRPC server started on port {port}")
+    await server.wait_for_termination()
 
 
 # ---------------------------------------------------------------------------
@@ -293,6 +332,14 @@ async def handle_http_request(reader, writer):
                 f'"uptime":{node_state.uptime_sec},'
                 f'"capacity":{CAPACITY_SCORE}}}'
             ).encode("utf-8")
+            content_type = "application/json"
+            status = "200 OK"
+        elif "GET /reset" in request_str or "POST /reset" in request_str:
+            node_state.reset()
+            scheduler.reset()
+            global recent_completions
+            recent_completions.clear()
+            body = b'{"status":"reset"}'
             content_type = "application/json"
             status = "200 OK"
         else:
@@ -333,10 +380,13 @@ async def start_http_server(port: int):
 # ---------------------------------------------------------------------------
 
 
+# Global list for throughput calculation
+recent_completions = []
+
 async def metrics_update_loop():
     """Periodically update Prometheus metrics and simulated CPU (every 1 second)."""
     EMA_ALPHA = 0.3
-    recent_completions = []  # Timestamps for throughput calculation
+    global recent_completions
 
     while True:
         # Update queue depths from scheduler
@@ -368,6 +418,11 @@ async def metrics_update_loop():
 async def on_request_completed(result):
     """Callback from executor when a request completes."""
     node_state.total_processed += 1
+    
+    # Add to recent completions for throughput_rps
+    global recent_completions
+    recent_completions.append(time.time())
+    
     NODE_REQUESTS_PROCESSED.labels(
         node=NODE_NAME, **{"class": result.request_class}
     ).inc()
@@ -411,6 +466,7 @@ async def main():
     # Start all concurrent tasks
     await asyncio.gather(
         start_http_server(NODE_METRICS_PORT),
+        serve_grpc(NODE_GRPC_PORT),
         scheduler.run(),
         executor.run(scheduler),
         metrics_update_loop(),

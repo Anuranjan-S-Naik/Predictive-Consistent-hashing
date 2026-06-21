@@ -39,6 +39,8 @@ from coordinator.feedback.optimizer import FeedbackOptimizer
 from coordinator.ml.classifier import RequestClassifier
 from coordinator.ml.forecaster import TrafficForecaster
 
+from coordinator.grpc.coordinator_pb2 import RouteRequestMsg, NodeIdMsg, RequestClass
+from coordinator.grpc.coordinator_pb2_grpc import CoordinatorNodeServiceStub
 import grpc
 import yaml
 from fastapi import FastAPI, Request, Response, HTTPException, Security, Depends
@@ -68,6 +70,12 @@ logging.basicConfig(
     format="%(asctime)s | %(name)s | %(levelname)s | %(message)s",
 )
 logger = logging.getLogger("coordinator")
+
+REQUEST_CLASS_TO_PROTO = {
+    "Light": RequestClass.REQUEST_CLASS_LIGHT,
+    "Medium": RequestClass.REQUEST_CLASS_MEDIUM,
+    "Heavy": RequestClass.REQUEST_CLASS_HEAVY,
+}
 
 
 def load_config(path: str) -> dict:
@@ -205,6 +213,47 @@ ml_classifier: Optional[RequestClassifier] = None
 ml_forecaster: Optional[TrafficForecaster] = None
 
 # ---------------------------------------------------------------------------
+# Background Poller
+# ---------------------------------------------------------------------------
+
+async def poll_node_metrics():
+    """Periodically fetch live metrics from all nodes via gRPC."""
+    while True:
+        try:
+            for node_name, channel in grpc_pool.get_all_channels().items():
+                stub = CoordinatorNodeServiceStub(channel)
+                msg = NodeIdMsg(node_id=node_name)
+                try:
+                    resp = await asyncio.wait_for(stub.GetNodeMetrics(msg), timeout=2.0)
+                    metrics = {
+                        "cpu_pct": getattr(resp, "cpu_pct", 5.0),
+                        "memory_pct": getattr(resp, "memory_pct", 0.0),
+                        "queue_depth": getattr(resp, "queue_depth_total", 0),
+                        "queue_depth_light": getattr(resp, "queue_depth_light", 0),
+                        "queue_depth_medium": getattr(resp, "queue_depth_medium", 0),
+                        "queue_depth_heavy": getattr(resp, "queue_depth_heavy", 0),
+                        "queue_max": 450,
+                        "latency_ema_ms": getattr(resp, "latency_ema_ms", 0.0),
+                        "latency_max_ms": 5000.0,
+                        "predicted_load": 0.0,
+                        "throughput_rps": getattr(resp, "throughput_rps", 0.0),
+                        "vnode_count": hash_ring.get_vnode_count(node_name) if hash_ring else 150,
+                        "total_requests_processed": getattr(resp, "total_requests_processed", 0),
+                        "total_requests_rejected": getattr(resp, "total_requests_rejected", 0),
+                    }
+                    if allocation_engine:
+                        allocation_engine.update_node_metrics(node_name, metrics)
+                    if redis_metrics_cache:
+                        await redis_metrics_cache.write_node_metrics(node_name, metrics)
+                except asyncio.TimeoutError:
+                    pass
+                except Exception as e:
+                    logger.debug(f"Error polling metrics for {node_name}: {e}")
+        except Exception as e:
+            logger.error(f"Metrics polling loop error: {e}")
+        await asyncio.sleep(2.0)
+
+# ---------------------------------------------------------------------------
 # Lifespan (startup / shutdown)
 # ---------------------------------------------------------------------------
 
@@ -250,8 +299,13 @@ async def lifespan(app: FastAPI):
     # Seed initial metrics for each node
     for node in nodes:
         allocation_engine.update_node_metrics(node["name"], {
-            "cpu_pct": 5.0, "queue_depth": 0, "queue_max": 450,
+            "cpu_pct": 5.0, "memory_pct": 0.0, "queue_depth": 0, "queue_max": 450,
+            "queue_depth_light": 0, "queue_depth_medium": 0, "queue_depth_heavy": 0,
             "latency_ema_ms": 0.0, "latency_max_ms": 5000.0,
+            "throughput_rps": 0.0,
+            "vnode_count": hash_ring.get_vnode_count(node["name"]) if hash_ring else 150,
+            "total_requests_processed": 0,
+            "total_requests_rejected": 0,
             "predicted_load": 0.0,
         })
 
@@ -355,10 +409,14 @@ async def lifespan(app: FastAPI):
     logger.info("Phase 5 ML pipeline fully initialized")
     logger.info(f"Coordinator ready on {COORDINATOR_HOST}:{COORDINATOR_PORT}")
 
+    # Start metrics polling task
+    polling_task = asyncio.create_task(poll_node_metrics())
+
     yield  # Application is running
 
     # --- Shutdown ---
     logger.info("Coordinator shutting down...")
+    polling_task.cancel()
     if ml_forecaster:
         await ml_forecaster.stop()
     if daa_engine:
@@ -511,6 +569,39 @@ async def submit_request(request: Request, _key: str = Depends(verify_api_key)):
     if result.get("routing_method") == "chord_router":
         CHORD_OVERFLOW.inc()
 
+    # Forward request to assigned node via gRPC
+    assigned_node = result.get("assigned_node")
+    if app_config.get("forward_to_node", True):
+        if assigned_node:
+            channel = grpc_pool.get_channel(assigned_node)
+            if channel:
+                stub = CoordinatorNodeServiceStub(channel)
+                msg = RouteRequestMsg(
+                    request_id=result.get("request_id", ""),
+                    request_class=REQUEST_CLASS_TO_PROTO.get(
+                        predicted_class,
+                        RequestClass.REQUEST_CLASS_MEDIUM,
+                    ),
+                    confidence=result.get("confidence", 0.0),
+                    endpoint=body.get("endpoint", "/api/status"),
+                    method=body.get("method", "GET"),
+                    payload_bytes=body.get("payload_bytes", 0),
+                    source_id=body.get("source_id", ""),
+                    arrival_timestamp_ms=int(result.get("timestamp", time.time()) * 1000),
+                    dispatch_timestamp_ms=int(time.time() * 1000),
+                    routing_hops=result.get("routing_hops", 1),
+                    assigned_by=result.get("routing_method", "allocation_engine"),
+                    feature_vector=result.get("feature_vector", []),
+                    experiment_id=body.get("experiment_id", ""),
+                )
+                # Dispatch async (fire and forget to not block coordinator)
+                async def dispatch_request():
+                    try:
+                        await stub.RouteRequest(msg)
+                    except Exception as e:
+                        logger.error(f"Failed to route request to {assigned_node}: {e}")
+                asyncio.create_task(dispatch_request())
+
     # Phase 4: Async buffer to PostgreSQL (non-blocking)
     if postgres_writer:
         await postgres_writer.buffer_request(RequestRecord(
@@ -531,6 +622,85 @@ async def submit_request(request: Request, _key: str = Depends(verify_api_key)):
         ))
 
     return result
+@app.post("/api/v1/reset", tags=["system"])
+async def reset_system():
+    """Reset the metrics on coordinator and all active nodes."""
+    # 1. Reset allocation engine metrics
+    if allocation_engine:
+        allocation_engine.reset()
+        # Seed initial metrics for each node again
+        nodes = app_config.get("cluster", {}).get("nodes", [])
+        for node in nodes:
+            allocation_engine.update_node_metrics(node["name"], {
+                "cpu_pct": 5.0, "memory_pct": 0.0, "queue_depth": 0, "queue_max": 450,
+                "queue_depth_light": 0, "queue_depth_medium": 0, "queue_depth_heavy": 0,
+                "latency_ema_ms": 0.0, "latency_max_ms": 5000.0,
+                "throughput_rps": 0.0,
+                "vnode_count": hash_ring.get_vnode_count(node["name"]) if hash_ring else 150,
+                "total_requests_processed": 0,
+                "total_requests_rejected": 0,
+                "predicted_load": 0.0,
+            })
+    
+    # 2. Reset coordinator's recent requests
+    if request_router:
+        request_router.recent_requests.clear()
+        
+    # 3. Reset Prometheus metrics
+    try:
+        for cls in ["Light", "Medium", "Heavy"]:
+            REQUESTS_CLASSIFIED.labels(**{"class": cls})._value.set(0)
+        CLASSIFIER_CONFIDENCE.set(0.0)
+        CHORD_OVERFLOW._value.set(0)
+    except Exception as e:
+        logger.error(f"Error resetting coordinator prometheus metrics: {e}")
+        
+    # 4. Call reset on all nodes via HTTP
+    import httpx
+    nodes = app_config.get("cluster", {}).get("nodes", [])
+    async with httpx.AsyncClient() as client:
+        tasks = []
+        for node in nodes:
+            name = node["name"]
+            url = f"http://{name}:9100/reset"
+            tasks.append(client.get(url, timeout=2.0))
+        
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        for name, res in zip([n["name"] for n in nodes], results):
+            if isinstance(res, Exception):
+                logger.warning(f"Failed to reset node {name}: {res}")
+            else:
+                logger.info(f"Successfully reset node {name}: {res.status_code}")
+                
+    return {"status": "success", "message": "System metrics reset successfully"}
+
+
+
+@app.get("/api/v1/recent_requests", tags=["requests"])
+async def get_recent_requests():
+    """Return the last 20 routed requests for the live dashboard UI."""
+    if not request_router:
+        return []
+    return list(request_router.recent_requests)
+
+
+@app.get("/api/v1/dashboard_metrics", tags=["system"])
+async def get_dashboard_metrics():
+    """Return aggregate metrics for the overview stat cards."""
+    node_metrics = allocation_engine.get_all_metrics() if allocation_engine else {}
+    if request_router:
+        return request_router.get_dashboard_metrics(node_metrics=node_metrics)
+    cpu_values = [float(m.get("cpu_pct", 0.0)) for m in node_metrics.values()]
+    return {
+        "throughput_rps": 0,
+        "avg_cpu_pct": round(sum(cpu_values) / len(cpu_values), 3) if cpu_values else 0.0,
+        "avg_latency_ms": 0.0,
+        "total_processed": 0,
+        "window_seconds": 1,
+        "latency_window_count": 0,
+        "active_nodes": len(cpu_values),
+        "timestamp": time.time(),
+    }
 
 
 @app.get("/api/v1/datastores", tags=["system"])

@@ -147,6 +147,15 @@ class WFQScheduler:
         """Stop the scheduler loop."""
         self._running = False
 
+    def reset(self):
+        """Reset the queues and counters."""
+        self.total_enqueued = 0
+        self.total_rejected = 0
+        self.total_dequeued = 0
+        for cls in self._queues:
+            self._queues[cls] = asyncio.Queue(maxsize=self.max_depths[cls])
+        self._output_queue = asyncio.Queue()
+
     def get_queue_depths(self) -> Dict[str, int]:
         """Get current queue depths for all classes."""
         return {cls: q.qsize() for cls, q in self._queues.items()}

@@ -1,11 +1,16 @@
 'use client';
 
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useRef } from 'react';
 import { motion } from 'framer-motion';
 import { Server, Cpu, HardDrive, Clock } from 'lucide-react';
 import { Badge } from '@/components/ui';
 import { cn, getStatusColor } from '@/lib/utils';
 import { NODE_COLORS, NODE_LABELS, REFRESH_INTERVALS, API_BASE_URL } from '@/constants';
+
+const API_HEADERS = {
+  'X-API-Key': 'dev-api-key-change-me',
+  'Content-Type': 'application/json',
+};
 
 interface BackendNode {
   name: string;
@@ -34,73 +39,120 @@ interface DisplayNode {
   grpc_address: string;
 }
 
-function enrichNode(node: BackendNode, tick: number): DisplayNode {
-  const cap = node.capacity_score || 100;
-  return {
-    node_id: node.name,
-    capacity_score: cap,
-    cpu_pct: 10 + Math.random() * 65,
-    memory_pct: 15 + Math.random() * 40,
-    queue_depth_light: Math.floor(Math.random() * 100),
-    queue_depth_medium: Math.floor(Math.random() * 70),
-    queue_depth_heavy: Math.floor(Math.random() * 40),
-    latency_ema_ms: 30 + Math.random() * 250,
-    throughput_rps: 50 + Math.random() * 200,
-    vnode_count: Math.floor(cap * 1.5),
-    total_requests_processed: Math.floor(5000 + Math.random() * 80000),
-    is_healthy: node.grpc_connected,
-    cpu_cores: node.cpu_cores || 4,
-    memory_gb: node.memory_gb || 8,
-    grpc_address: node.grpc_address || '',
-  };
-}
-
-function generateMockNode(name: string, cap: number): DisplayNode {
-  return {
-    node_id: name,
-    capacity_score: cap,
-    cpu_pct: 10 + Math.random() * 65,
-    memory_pct: 15 + Math.random() * 40,
-    queue_depth_light: Math.floor(Math.random() * 100),
-    queue_depth_medium: Math.floor(Math.random() * 70),
-    queue_depth_heavy: Math.floor(Math.random() * 40),
-    latency_ema_ms: 30 + Math.random() * 250,
-    throughput_rps: 50 + Math.random() * 200,
-    vnode_count: Math.floor(cap * 1.5),
-    total_requests_processed: Math.floor(5000 + Math.random() * 80000),
-    is_healthy: Math.random() > 0.03,
-    cpu_cores: 4,
-    memory_gb: 8,
-    grpc_address: 'N/A',
-  };
+interface RecentRequest {
+  request_id: string;
+  predicted_class: string;
+  assigned_node: string;
+  elapsed_ms: number;
+  timestamp: number;
 }
 
 function useNodes() {
   const [nodes, setNodes] = useState<DisplayNode[]>([]);
   const [isLive, setIsLive] = useState(false);
-  const tickRef = { current: 0 };
+  const recentRequestsRef = useRef<RecentRequest[]>([]);
 
   const fetchNodes = useCallback(async () => {
-    tickRef.current += 1;
+    const opts = { headers: API_HEADERS, signal: AbortSignal.timeout(4000) };
+
     try {
-      const res = await fetch(`${API_BASE_URL}/api/v1/nodes`, {
-        headers: { 'X-API-Key': 'dev-api-key-change-me' },
-        signal: AbortSignal.timeout(4000),
-      });
-      if (res.ok) {
-        const data = await res.json();
-        const backendNodes: BackendNode[] = data.nodes || [];
-        if (backendNodes.length > 0) {
-          setNodes(backendNodes.map(n => enrichNode(n, tickRef.current)));
-          setIsLive(true);
-          return;
-        }
+      // Fetch all three data sources concurrently
+      const [nodesRes, allocRes, recentRes] = await Promise.allSettled([
+        fetch(`${API_BASE_URL}/api/v1/nodes`, opts).then(r => r.ok ? r.json() : null),
+        fetch(`${API_BASE_URL}/api/v1/allocation`, opts).then(r => r.ok ? r.json() : null),
+        fetch(`${API_BASE_URL}/api/v1/recent_requests`, opts).then(r => r.ok ? r.json() : null),
+      ]);
+
+      const nodesData = nodesRes.status === 'fulfilled' ? nodesRes.value : null;
+      const allocData = allocRes.status === 'fulfilled' ? allocRes.value : null;
+      const recentData = recentRes.status === 'fulfilled' ? recentRes.value : null;
+
+      // Update recent requests
+      if (recentData && Array.isArray(recentData)) {
+        recentRequestsRef.current = recentData;
       }
-    } catch { /* fallback */ }
+      const recentRequests = recentRequestsRef.current;
+
+      if (nodesData && nodesData.nodes && nodesData.nodes.length > 0) {
+        const backendNodes: BackendNode[] = nodesData.nodes;
+        const nodeMetrics = allocData?.node_metrics || {};
+        const maxTs = recentRequests.length > 0
+          ? Math.max(...recentRequests.map(r => r.timestamp))
+          : 0;
+
+        const enrichedNodes = backendNodes.map((n: BackendNode) => {
+          const metrics = nodeMetrics[n.name] || {};
+
+          // Compute from recent request stream
+          const nodeReqs = recentRequests.filter(r => r.assigned_node === n.name);
+          const reqs1_5s = nodeReqs.filter(r => r.timestamp >= maxTs - 1.5);
+
+          const computedRps = reqs1_5s.length / 1.5;
+          const computedQueue = reqs1_5s.reduce((sum, r) => {
+            const w = r.predicted_class === 'Heavy' ? 12 : r.predicted_class === 'Medium' ? 4 : 1;
+            return sum + w;
+          }, 0) / 1.5;
+
+          const last10Reqs = nodeReqs.slice(0, 10);
+          const computedLatency = last10Reqs.length > 0
+            ? last10Reqs.reduce((sum, r) => sum + r.elapsed_ms, 0) / last10Reqs.length
+            : 0;
+
+          // Use backend metrics first, fall back to computed values
+          const rps = metrics.throughput_rps && metrics.throughput_rps > 0
+            ? metrics.throughput_rps : computedRps;
+          const latency = metrics.latency_ema_ms && metrics.latency_ema_ms > 0
+            ? metrics.latency_ema_ms : computedLatency;
+
+          const q_light = metrics.queue_depth_light ?? Math.round(computedQueue * 0.5);
+          const q_medium = metrics.queue_depth_medium ?? Math.round(computedQueue * 0.35);
+          const q_heavy = metrics.queue_depth_heavy ?? Math.round(computedQueue * 0.15);
+
+          // CPU: use backend, estimate if it reports idle baseline
+          let cpu = metrics.cpu_pct ?? 5.0;
+          if (cpu <= 5.0 && computedRps > 0) {
+            const load = (computedRps * 5 + computedQueue * 2.5) / ((n.capacity_score || 100) / 100);
+            cpu = Math.min(95.0, 5.0 + load);
+          }
+
+          // Memory: use backend, estimate from request volume
+          let mem = metrics.memory_pct ?? 0.0;
+          if (mem <= 0.0) {
+            mem = Math.min(80.0, 15.0 + nodeReqs.length * 0.02);
+          }
+
+          return {
+            node_id: n.name,
+            capacity_score: n.capacity_score || 100,
+            cpu_pct: cpu,
+            memory_pct: mem,
+            queue_depth_light: q_light,
+            queue_depth_medium: q_medium,
+            queue_depth_heavy: q_heavy,
+            latency_ema_ms: latency,
+            throughput_rps: rps,
+            vnode_count: metrics.vnode_count ?? Math.floor((n.capacity_score || 100) * 1.5),
+            total_requests_processed: metrics.total_requests_processed || nodeReqs.length,
+            is_healthy: n.grpc_connected,
+            cpu_cores: n.cpu_cores || 4,
+            memory_gb: n.memory_gb || 8,
+            grpc_address: n.grpc_address || '',
+          };
+        });
+
+        setNodes(enrichedNodes);
+        setIsLive(true);
+        return;
+      }
+    } catch { /* fallback below */ }
+
+    // Fallback: idle state with zeros
     setIsLive(false);
     setNodes([
-      generateMockNode('node_s1', 100), generateMockNode('node_s2', 70),
-      generateMockNode('node_s3', 150), generateMockNode('node_s4', 90),
+      { node_id: 'node_s1', capacity_score: 100, cpu_pct: 5.0, memory_pct: 0, queue_depth_light: 0, queue_depth_medium: 0, queue_depth_heavy: 0, latency_ema_ms: 0, throughput_rps: 0, vnode_count: 150, total_requests_processed: 0, is_healthy: false, cpu_cores: 4, memory_gb: 8, grpc_address: 'N/A' },
+      { node_id: 'node_s2', capacity_score: 70, cpu_pct: 5.0, memory_pct: 0, queue_depth_light: 0, queue_depth_medium: 0, queue_depth_heavy: 0, latency_ema_ms: 0, throughput_rps: 0, vnode_count: 105, total_requests_processed: 0, is_healthy: false, cpu_cores: 4, memory_gb: 8, grpc_address: 'N/A' },
+      { node_id: 'node_s3', capacity_score: 150, cpu_pct: 5.0, memory_pct: 0, queue_depth_light: 0, queue_depth_medium: 0, queue_depth_heavy: 0, latency_ema_ms: 0, throughput_rps: 0, vnode_count: 225, total_requests_processed: 0, is_healthy: false, cpu_cores: 4, memory_gb: 8, grpc_address: 'N/A' },
+      { node_id: 'node_s4', capacity_score: 90, cpu_pct: 5.0, memory_pct: 0, queue_depth_light: 0, queue_depth_medium: 0, queue_depth_heavy: 0, latency_ema_ms: 0, throughput_rps: 0, vnode_count: 135, total_requests_processed: 0, is_healthy: false, cpu_cores: 4, memory_gb: 8, grpc_address: 'N/A' },
     ]);
   }, []);
 
