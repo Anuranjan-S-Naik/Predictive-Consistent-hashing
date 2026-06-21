@@ -1,0 +1,56 @@
+
+<style>
+  .nov-wrap { padding: 1rem 0; }
+  .nov-row { display: grid; grid-template-columns: 180px 1fr 1fr; gap: 0; border-bottom: 0.5px solid var(--color-border-tertiary); }
+  .nov-row:last-child { border-bottom: none; }
+  .nov-cell { padding: 10px 14px; font-size: 13px; color: var(--color-text-primary); }
+  .nov-header { font-weight: 500; font-size: 12px; color: var(--color-text-secondary); padding: 8px 14px; border-bottom: 0.5px solid var(--color-border-secondary); display: grid; grid-template-columns: 180px 1fr 1fr; }
+  .nov-label { font-weight: 500; color: var(--color-text-primary); }
+  .nov-old { color: var(--color-text-danger); font-size: 12px; }
+  .nov-new { color: var(--color-text-success); font-size: 12px; font-weight: 500; }
+  .nov-card { background: var(--color-background-primary); border: 0.5px solid var(--color-border-tertiary); border-radius: 12px; overflow: hidden; margin-bottom: 1rem; }
+  .nov-badge { display: inline-block; font-size: 11px; padding: 2px 8px; border-radius: 10px; margin-top: 4px; }
+</style>
+<div class="nov-wrap">
+  <div class="nov-card">
+    <div class="nov-header">
+      <span>Dimension</span>
+      <span>What existing systems do</span>
+      <span>What your project adds</span>
+    </div>
+    <div class="nov-row">
+      <div class="nov-cell nov-label">Flow awareness</div>
+      <div class="nov-cell nov-old">Ring routes based on IP only. Zero knowledge of request size or duration.</div>
+      <div class="nov-cell nov-new">LSTM reads first 5 packets and predicts flow weight before routing begins.</div>
+    </div>
+    <div class="nov-row">
+      <div class="nov-cell nov-label">Vnode count</div>
+      <div class="nov-cell nov-old">Fixed at deployment. Cassandra defaults to 256 per node — never changes at runtime.</div>
+      <div class="nov-cell nov-new">Dynamically recomputed every 100 flows based on actual observed load. Ring self-tunes.</div>
+    </div>
+    <div class="nov-row">
+      <div class="nov-cell nov-label">Heavy flow handling</div>
+      <div class="nov-cell nov-old">No special treatment. A 5 GB transfer gets routed the same way as a 1 KB ping.</div>
+      <div class="nov-cell nov-new">Heavy flows detected early and steered to min-load server before saturation occurs.</div>
+    </div>
+    <div class="nov-row">
+      <div class="nov-cell nov-label">Rebalancing trigger</div>
+      <div class="nov-cell nov-old">Only on server add/remove (failure events). No proactive load-based rebalancing.</div>
+      <div class="nov-cell nov-new">Periodic (every N flows) AND reactive (load deviation threshold). Two-level trigger.</div>
+    </div>
+    <div class="nov-row">
+      <div class="nov-cell nov-label">Model adaptation</div>
+      <div class="nov-cell nov-old">No ML component at all. Pure hash arithmetic.</div>
+      <div class="nov-cell nov-new">Training buffer collects real errors; model fine-tunes on recent traffic patterns.</div>
+    </div>
+    <div class="nov-row">
+      <div class="nov-cell nov-label">Research focus</div>
+      <div class="nov-cell nov-old">Existing papers optimize for fault tolerance (server failure/recovery).</div>
+      <div class="nov-cell nov-new">Your angle: optimize for flow heterogeneity — a different, underexplored problem.</div>
+    </div>
+  </div>
+
+  <div style="background:var(--color-background-info);border-radius:8px;padding:10px 14px;font-size:13px;color:var(--color-text-info);margin-bottom:0.5rem;">
+    One-line novelty claim for your report: "We introduce the first consistent hashing system that uses early-packet deep learning predictions to drive adaptive virtual node rebalancing, targeting flow heterogeneity rather than server failures."
+  </div>
+</div>

@@ -1,0 +1,258 @@
+
+<style>
+  #vn-wrap { padding: 1rem 0; }
+  #vn-ring-wrap { display: flex; justify-content: center; }
+  .vn-stats { display: grid; grid-template-columns: repeat(5, minmax(0,1fr)); gap: 8px; margin: 1rem 0; }
+  .vn-stat { background: var(--color-background-secondary); border-radius: 8px; padding: 10px 8px; text-align: center; }
+  .vn-stat .label { font-size: 11px; color: var(--color-text-secondary); margin-bottom: 4px; }
+  .vn-stat .val { font-size: 18px; font-weight: 500; color: var(--color-text-primary); }
+  .vn-stat .sub { font-size: 11px; margin-top: 2px; }
+  .vn-controls { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; margin: 0.75rem 0; }
+  .vn-controls button { font-size: 13px; padding: 6px 14px; cursor: pointer; border-radius: 8px; border: 0.5px solid var(--color-border-secondary); background: transparent; color: var(--color-text-primary); }
+  .vn-controls button:hover { background: var(--color-background-secondary); }
+  .vn-controls button:active { transform: scale(0.98); }
+  .vn-badge { font-size: 11px; padding: 2px 8px; border-radius: 12px; display: inline-block; }
+  .mode-label { font-size: 13px; color: var(--color-text-secondary); font-weight: 500; }
+  #vn-log { font-size: 12px; color: var(--color-text-secondary); min-height: 20px; margin-top: 4px; }
+</style>
+<div id="vn-wrap">
+  <div id="vn-ring-wrap">
+    <svg id="ring-svg" width="320" height="320" viewBox="0 0 320 320"></svg>
+  </div>
+  <div class="vn-stats" id="stat-cards"></div>
+  <div class="vn-controls">
+    <button onclick="sendHeavyFlow()">Send heavy flow</button>
+    <button onclick="sendLightFlow()">Send light flow</button>
+    <button onclick="rebalance()">Rebalance vnodes</button>
+    <button onclick="resetAll()">Reset</button>
+  </div>
+  <div class="vn-controls">
+    <span class="mode-label">Mode:</span>
+    <button onclick="setMode('fixed')" id="btn-fixed" style="border-color:var(--color-border-primary)">Fixed vnodes</button>
+    <button onclick="setMode('adaptive')" id="btn-adaptive">Adaptive vnodes</button>
+  </div>
+  <div id="vn-log">Click "Send heavy flow" to start.</div>
+</div>
+<script>
+const CX = 160, CY = 160, R = 120;
+const COLORS = ['#534AB7','#0F6E56','#993C1D','#854F0B','#185FA5'];
+const LIGHT_COLORS = ['#EEEDFE','#E1F5EE','#FAECE7','#FAEEDA','#E6F1FB'];
+const NAMES = ['A','B','C','D','E'];
+let mode = 'fixed';
+let loads = [0,0,0,0,0];
+let vnodes = [4,4,4,4,4];
+let flowCount = 0;
+let dots = [];
+
+function setMode(m) {
+  mode = m;
+  document.getElementById('btn-fixed').style.borderColor = m==='fixed' ? 'var(--color-border-primary)' : 'var(--color-border-secondary)';
+  document.getElementById('btn-adaptive').style.borderColor = m==='adaptive' ? 'var(--color-border-primary)' : 'var(--color-border-secondary)';
+  document.getElementById('btn-fixed').style.fontWeight = m==='fixed' ? '500' : '400';
+  document.getElementById('btn-adaptive').style.fontWeight = m==='adaptive' ? '500' : '400';
+  log('Mode: ' + (m==='fixed' ? 'Fixed vnodes (4 each, never changes)' : 'Adaptive vnodes (adjusts after rebalance)'));
+  drawRing();
+}
+
+function getVnodePositions() {
+  let positions = [];
+  for (let s=0; s<5; s++) {
+    let count = mode==='fixed' ? 4 : vnodes[s];
+    for (let v=0; v<count; v++) {
+      let angle = ((s * 100 + v * (500/count)) % 500) / 500 * 2 * Math.PI - Math.PI/2;
+      positions.push({server: s, angle});
+    }
+  }
+  return positions.sort((a,b) => a.angle - b.angle);
+}
+
+function getServerForAngle(angle) {
+  let positions = getVnodePositions();
+  let norm = ((angle % (2*Math.PI)) + 2*Math.PI) % (2*Math.PI);
+  for (let p of positions) {
+    let pa = ((p.angle % (2*Math.PI)) + 2*Math.PI) % (2*Math.PI);
+    if (pa >= norm) return p.server;
+  }
+  return positions[0].server;
+}
+
+function drawRing() {
+  const svg = document.getElementById('ring-svg');
+  svg.innerHTML = '';
+
+  // Ring background
+  const circle = document.createElementNS('http://www.w3.org/2000/svg','circle');
+  circle.setAttribute('cx', CX); circle.setAttribute('cy', CY);
+  circle.setAttribute('r', R); circle.setAttribute('fill', 'none');
+  circle.setAttribute('stroke', 'var(--color-border-tertiary)');
+  circle.setAttribute('stroke-width', '1.5');
+  svg.appendChild(circle);
+
+  // Color arcs between vnodes
+  let positions = getVnodePositions();
+  if (positions.length > 0) {
+    for (let i=0; i<positions.length; i++) {
+      let a1 = positions[i].angle;
+      let a2 = positions[(i+1)%positions.length].angle;
+      if (a2 <= a1) a2 += 2*Math.PI;
+      let steps = 30;
+      let pts = [];
+      for (let k=0; k<=steps; k++) {
+        let a = a1 + (a2-a1)*k/steps;
+        pts.push([CX + (R-7)*Math.cos(a), CY + (R-7)*Math.sin(a)]);
+      }
+      let path = document.createElementNS('http://www.w3.org/2000/svg','path');
+      let d = 'M' + pts[0][0]+','+pts[0][1];
+      for (let k=1; k<=steps; k++) d += ' L'+pts[k][0]+','+pts[k][1];
+      path.setAttribute('d', d); path.setAttribute('fill','none');
+      path.setAttribute('stroke', COLORS[positions[i].server]);
+      path.setAttribute('stroke-width', '13'); path.setAttribute('stroke-opacity','0.18');
+      svg.appendChild(path);
+    }
+  }
+
+  // Vnode dots on ring
+  let positions2 = getVnodePositions();
+  for (let p of positions2) {
+    let x = CX + R * Math.cos(p.angle);
+    let y = CY + R * Math.sin(p.angle);
+    let c = document.createElementNS('http://www.w3.org/2000/svg','circle');
+    c.setAttribute('cx',x); c.setAttribute('cy',y);
+    c.setAttribute('r','6'); c.setAttribute('fill', COLORS[p.server]);
+    c.setAttribute('stroke', 'var(--color-background-primary)');
+    c.setAttribute('stroke-width','2');
+    svg.appendChild(c);
+  }
+
+  // Server labels in center ring
+  for (let s=0; s<5; s++) {
+    let count = mode==='fixed' ? 4 : vnodes[s];
+    let baseAngle = (s * 100 / 500) * 2 * Math.PI - Math.PI/2;
+    let lx = CX + 68 * Math.cos(baseAngle);
+    let ly = CY + 68 * Math.sin(baseAngle);
+    let bg = document.createElementNS('http://www.w3.org/2000/svg','circle');
+    bg.setAttribute('cx',lx); bg.setAttribute('cy',ly);
+    bg.setAttribute('r','22'); bg.setAttribute('fill', LIGHT_COLORS[s]);
+    bg.setAttribute('stroke', COLORS[s]); bg.setAttribute('stroke-width','1.5');
+    svg.appendChild(bg);
+    let t1 = document.createElementNS('http://www.w3.org/2000/svg','text');
+    t1.setAttribute('x',lx); t1.setAttribute('y',ly-5);
+    t1.setAttribute('text-anchor','middle'); t1.setAttribute('dominant-baseline','central');
+    t1.setAttribute('font-size','14'); t1.setAttribute('font-weight','500');
+    t1.setAttribute('fill', COLORS[s]); t1.textContent = NAMES[s];
+    svg.appendChild(t1);
+    let t2 = document.createElementNS('http://www.w3.org/2000/svg','text');
+    t2.setAttribute('x',lx); t2.setAttribute('y',ly+9);
+    t2.setAttribute('text-anchor','middle'); t2.setAttribute('dominant-baseline','central');
+    t2.setAttribute('font-size','10'); t2.setAttribute('fill', COLORS[s]);
+    t2.setAttribute('opacity','0.8'); t2.textContent = count + ' slots';
+    svg.appendChild(t2);
+  }
+
+  // Animated flow dots
+  for (let dot of dots) {
+    let el = document.createElementNS('http://www.w3.org/2000/svg','circle');
+    el.setAttribute('cx', CX + R*Math.cos(dot.angle));
+    el.setAttribute('cy', CY + R*Math.sin(dot.angle));
+    el.setAttribute('r', dot.heavy ? '7' : '4');
+    el.setAttribute('fill', dot.heavy ? '#E24B4A' : '#1D9E75');
+    el.setAttribute('opacity','0.9');
+    svg.appendChild(el);
+  }
+
+  drawStats();
+}
+
+function drawStats() {
+  const container = document.getElementById('stat-cards');
+  container.innerHTML = '';
+  let total = loads.reduce((a,b)=>a+b,0) || 1;
+  let avg = total/5;
+  for (let s=0; s<5; s++) {
+    let pct = Math.round(loads[s]/total*100);
+    let count = mode==='fixed' ? 4 : vnodes[s];
+    let overloaded = loads[s] > avg*1.3;
+    let underloaded = loads[s] < avg*0.7 && total>0;
+    let card = document.createElement('div');
+    card.className = 'vn-stat';
+    card.style.borderLeft = '3px solid ' + COLORS[s];
+    card.innerHTML = `<div class="label">Server ${NAMES[s]}</div>
+      <div class="val" style="color:${COLORS[s]}">${Math.round(loads[s])}</div>
+      <div class="sub" style="color:var(--color-text-tertiary)">${pct}% load</div>
+      <div style="margin-top:5px;font-size:11px;color:${COLORS[s]}">${count} slots</div>
+      ${overloaded ? '<div style="font-size:10px;color:#A32D2D;margin-top:2px">overloaded</div>' : ''}
+      ${underloaded ? '<div style="font-size:10px;color:#0F6E56;margin-top:2px">underused</div>' : ''}`;
+    container.appendChild(card);
+  }
+}
+
+function sendHeavyFlow() {
+  flowCount++;
+  let angle = Math.random() * 2 * Math.PI - Math.PI/2;
+  let server = getServerForAngle(angle);
+  let weight = 40 + Math.round(Math.random()*60);
+  loads[server] += weight;
+  dots.push({angle, heavy: true, server});
+  if (dots.length > 6) dots.shift();
+  log(`Flow #${flowCount} → heavy (weight ${weight}) → Server ${NAMES[server]} (now load ${Math.round(loads[server])})`);
+  drawRing();
+  setTimeout(()=>{ dots = dots.filter(d=>d!==dots[0]); drawRing(); }, 1200);
+}
+
+function sendLightFlow() {
+  flowCount++;
+  let angle = Math.random() * 2 * Math.PI - Math.PI/2;
+  let server = getServerForAngle(angle);
+  let weight = 2 + Math.round(Math.random()*8);
+  loads[server] += weight;
+  dots.push({angle, heavy: false, server});
+  if (dots.length > 6) dots.shift();
+  log(`Flow #${flowCount} → light (weight ${weight}) → Server ${NAMES[server]} (now load ${Math.round(loads[server])})`);
+  drawRing();
+  setTimeout(()=>{ dots = dots.filter(d=>d!==dots[0]); drawRing(); }, 800);
+}
+
+function rebalance() {
+  if (mode === 'fixed') {
+    log('Fixed mode: vnodes never change. Switch to Adaptive to see rebalancing.');
+    return;
+  }
+  let total = loads.reduce((a,b)=>a+b,0);
+  if (total === 0) { log('Send some flows first, then rebalance.'); return; }
+  let avg = total / 5;
+  let totalSlots = 20;
+  let newVnodes = loads.map(l => {
+    if (avg === 0) return 4;
+    let ratio = l / avg;
+    if (ratio > 1.4) return 2;
+    if (ratio > 1.1) return 3;
+    if (ratio < 0.6) return 6;
+    if (ratio < 0.9) return 5;
+    return 4;
+  });
+  let changes = [];
+  for (let s=0; s<5; s++) {
+    if (newVnodes[s] !== vnodes[s]) {
+      changes.push(`${NAMES[s]}: ${vnodes[s]}→${newVnodes[s]} slots`);
+    }
+  }
+  vnodes = newVnodes;
+  log(changes.length ? 'Rebalanced: ' + changes.join(', ') : 'Already balanced — no changes needed.');
+  drawRing();
+}
+
+function resetAll() {
+  loads = [0,0,0,0,0];
+  vnodes = [4,4,4,4,4];
+  dots = [];
+  flowCount = 0;
+  log('Reset. Try sending 5-6 heavy flows, then click Rebalance.');
+  drawRing();
+}
+
+function log(msg) {
+  document.getElementById('vn-log').textContent = msg;
+}
+
+setMode('fixed');
+</script>
