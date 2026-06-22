@@ -449,7 +449,7 @@ export default function ForecastingPage() {
           </div>
           <div className="p-3 rounded-lg bg-zinc-800/30 border border-zinc-700/30">
             <p className="text-[10px] text-zinc-500 uppercase">Node At Risk</p>
-            <p className="text-lg font-bold text-rose-400 font-mono">{maxCpuNode ? maxCpuNode[0].replace('node_', 'S') : '—'}</p>
+            <p className="text-lg font-bold text-rose-400 font-mono">{maxCpuNode ? maxCpuNode[0].replace('node_s', 'S') : '—'}</p>
           </div>
           <div className="p-3 rounded-lg bg-zinc-800/30 border border-zinc-700/30">
             <p className="text-[10px] text-zinc-500 uppercase">Risk Level</p>
@@ -477,7 +477,7 @@ export default function ForecastingPage() {
                 <div className="flex items-center justify-between mb-3">
                   <div className="flex items-center gap-2">
                     <Server className={`w-4 h-4 ${isHighRisk ? 'text-rose-400' : 'text-zinc-400'}`} />
-                    <span className="text-sm font-semibold text-white">{name.replace('node_', 'Node ')}</span>
+                    <span className="text-sm font-semibold text-white">{name.replace('node_s', 'Node S')}</span>
                   </div>
                   {isHighRisk && <AlertTriangle className="w-3.5 h-3.5 text-rose-400 animate-pulse" />}
                 </div>
@@ -526,7 +526,7 @@ export default function ForecastingPage() {
           <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mt-6">
             {vnodeChanges.map((adj) => (
               <div key={adj.node_name} className="p-3 rounded-lg bg-zinc-800/20 border border-zinc-700/30">
-                <p className="text-xs font-semibold text-white mb-2">{adj.node_name.replace('node_', 'Node ')}</p>
+                <p className="text-xs font-semibold text-white mb-2">{adj.node_name.replace('node_s', 'Node S')}</p>
                 <div className="flex items-center gap-2 text-xs">
                   <div className="text-center">
                     <p className="text-zinc-500 text-[10px]">Before</p>
@@ -654,7 +654,7 @@ export default function ForecastingPage() {
             { label: 'Predicted Traffic', value: `${lastPrediction.toFixed(1)} req/s`, color: 'text-brand-400' },
             { label: 'Burst Risk', value: `${burstRisk}%`, color: burstRisk > 70 ? 'text-rose-400' : burstRisk > 40 ? 'text-amber-400' : 'text-emerald-400' },
             { label: 'Confidence', value: `${forecastConfidence.toFixed(1)}%`, color: 'text-emerald-400' },
-            { label: 'Node At Risk', value: maxCpuNode ? maxCpuNode[0].replace('node_', 'S') : 'None', color: 'text-rose-400' },
+            { label: 'Node At Risk', value: maxCpuNode ? maxCpuNode[0].replace('node_s', 'S') : 'None', color: 'text-rose-400' },
             { label: 'Action', value: daaData?.running ? 'VNode Redistribution' : 'Standby', color: 'text-brand-300' },
             { label: 'DAA Active', value: daaData?.running ? 'Yes' : 'No', color: 'text-emerald-400' },
           ].map((item) => (
