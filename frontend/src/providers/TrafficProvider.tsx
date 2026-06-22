@@ -148,6 +148,20 @@ export function TrafficProvider({ children }: { children: ReactNode }) {
     }
   }, [scenario]);
 
+  const startInterval = () => {
+    let speed = 400;
+    let count = 2;
+    if (scenario === 'Flash Crowd') { speed = 200; count = 4; }
+    else if (scenario === 'Heavy Burst') { speed = 100; count = 6; }
+    else if (scenario === 'Mixed Workload') { speed = 300; count = 3; }
+
+    return setInterval(() => {
+      for (let i = 0; i < count; i++) {
+        sendRequest();
+      }
+    }, speed);
+  };
+
   const handleToggle = () => {
     if (running) {
       if (intervalRef.current) clearInterval(intervalRef.current);
@@ -159,22 +173,16 @@ export function TrafficProvider({ children }: { children: ReactNode }) {
       setStats({ total: 0, avgLatency: 0, light: 0, medium: 0, heavy: 0, rps: 0 });
       setRunning(true);
 
-      intervalRef.current = setInterval(() => {
-        sendRequest();
-        sendRequest();
-      }, 400);
+      intervalRef.current = startInterval();
     }
   };
 
   useEffect(() => {
     if (running && intervalRef.current) {
       clearInterval(intervalRef.current);
-      intervalRef.current = setInterval(() => {
-        sendRequest();
-        sendRequest();
-      }, 400);
+      intervalRef.current = startInterval();
     }
-  }, [sendRequest, running]);
+  }, [scenario, running, sendRequest]);
 
   // Clean up on complete unmount (though this provider wraps the whole app so it shouldn't unmount)
   useEffect(() => {
