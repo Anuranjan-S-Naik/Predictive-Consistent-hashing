@@ -137,16 +137,16 @@ export default function ForecastingPage() {
             return [...seed, point];
           }
           const next = [...prev, point];
-          return next.length > 60 ? next.slice(-60) : next;
+          return next.length > 120 ? next.slice(-120) : next;
         });
       }
-    }, 3000);
+    }, 1000);
     return () => clearInterval(interval);
   }, [forecaster, isLive, currentRps]);
 
   useEffect(() => {
     fetchData();
-    const iv = setInterval(fetchData, 3000);
+    const iv = setInterval(fetchData, 1000);
     return () => clearInterval(iv);
   }, [fetchData]);
 
