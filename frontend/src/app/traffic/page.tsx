@@ -3,6 +3,7 @@
 import { motion } from 'framer-motion';
 import { SectionHeader, GlassPanel, Badge, StatCard, ProgressBar } from '@/components/ui';
 import { Zap, Play, Square, Activity, Server, Brain, Clock } from 'lucide-react';
+import { useRef, useEffect } from 'react';
 import { useTraffic } from '@/providers/TrafficProvider';
 
 function formatBytes(bytes: number): string {
