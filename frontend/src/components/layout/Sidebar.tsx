@@ -30,9 +30,7 @@ const NAV_SECTIONS = [
     title: 'Machine Learning',
     items: [
       { href: '/ml', icon: Brain, label: 'ML Explainability' },
-      { href: '/drift', icon: AlertTriangle, label: 'Drift Detection' },
       { href: '/forecasting', icon: TrendingUp, label: 'Forecasting' },
-      { href: '/health', icon: Activity, label: 'Model Health' },
     ],
   },
   {
