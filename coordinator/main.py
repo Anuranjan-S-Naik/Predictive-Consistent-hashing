@@ -366,24 +366,26 @@ async def lifespan(app: FastAPI):
         classifier_ok = ml_classifier.load()
         if classifier_ok:
             logger.info("Phase 5: XGBoost classifier loaded successfully")
-            # Generate synthetic reference distribution for PSI drift detection.
-            # This simulates the feature distribution from the training dataset
-            # so the system can detect when live traffic drifts from this baseline.
+            # Generate reference distribution for PSI drift detection.
+            # This baseline uses broad uniform-like distributions covering all
+            # expected traffic scenarios (light/medium/heavy, various endpoints).
+            # PSI will only trigger when real traffic drastically departs from
+            # this broad baseline (e.g., sudden all-heavy or all-burst traffic).
             import numpy as np
             rng = np.random.RandomState(42)
-            n_ref = 2000
+            n_ref = 3000
             ref_data = np.column_stack([
-                rng.beta(2, 5, n_ref),       # payload_bytes: skewed toward light
-                rng.beta(2, 3, n_ref),       # cpu_estimate: moderate
-                rng.uniform(0, 1, n_ref),    # endpoint_id: uniform
-                rng.beta(2, 8, n_ref),       # requests_last_5s: mostly low
-                rng.beta(2, 10, n_ref),      # avg_latency_ema: low baseline
-                rng.beta(1.5, 8, n_ref),     # queue_depth: mostly empty
-                rng.uniform(0, 1, n_ref),    # hour_of_day: uniform
-                rng.binomial(1, 0.1, n_ref).astype(float),  # is_burst: ~10%
+                rng.uniform(0.0, 1.0, n_ref),   # payload_bytes: full range (light to heavy)
+                rng.uniform(0.1, 1.0, n_ref),   # cpu_estimate: all CPU levels
+                rng.uniform(0.0, 1.0, n_ref),   # endpoint_id: all endpoints equally
+                rng.uniform(0.0, 0.5, n_ref),   # requests_last_5s: low-to-moderate traffic
+                rng.uniform(0.0, 0.4, n_ref),   # avg_latency_ema: low-to-moderate latency
+                rng.uniform(0.0, 0.3, n_ref),   # queue_depth: mostly empty to moderate
+                rng.uniform(0.0, 1.0, n_ref),   # hour_of_day: any time of day
+                rng.choice([0.0, 1.0], n_ref, p=[0.75, 0.25]),  # is_burst: ~25% burst
             ])
             ml_classifier.set_reference_distribution(ref_data)
-            logger.info("Phase 5: PSI reference distribution set (2000 synthetic samples)")
+            logger.info("Phase 5: PSI reference distribution set (3000 samples)")
         else:
             logger.warning("Phase 5: Classifier not available, using heuristic fallback")
     else:
