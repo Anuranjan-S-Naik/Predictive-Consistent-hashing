@@ -205,9 +205,9 @@ class RequestClassifier:
             total_correct = sum(o[2] for o in self._outcome_buffer)
             self._rolling_accuracy = total_correct / len(self._outcome_buffer)
 
-        # Track feature distributions for PSI
-        if feature_vector is not None and len(feature_vector) == 8:
-            self._feature_buffer.append(feature_vector)
+        # Track feature distributions for PSI (use first 8 features for v1 model)
+        if feature_vector is not None and len(feature_vector) >= 8:
+            self._feature_buffer.append(feature_vector[:8])
             if len(self._feature_buffer) > self._feature_buffer_max:
                 self._feature_buffer = self._feature_buffer[-self._feature_buffer_max:]
 

@@ -133,8 +133,8 @@ export default function ForecastingPage() {
                 <div key={i} className="flex-1 flex flex-col items-center gap-0.5 relative group">
                   <div className="w-full flex gap-px h-full items-end">
                     <div
-                      className="flex-1 rounded-t-sm bg-brand-500/40 transition-all duration-300"
-                      style={{ height: `${Math.max(predH, 2)}%` }}
+                      className="flex-1 rounded-t-sm bg-brand-500/70 transition-all duration-300"
+                      style={{ height: `${Math.max(predH, 4)}%` }}
                     />
                   </div>
                   {/* Tooltip */}
