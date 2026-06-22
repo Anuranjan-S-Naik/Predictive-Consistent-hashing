@@ -34,7 +34,7 @@ interface DisplayNode {
   grpc_address: string;
 }
 
-function enrichNode(node: BackendNode, metrics: any = {}): DisplayNode {
+function enrichNode(node: BackendNode, metrics: any = {}, vnodeCount: number = 0): DisplayNode {
   const cap = node.capacity_score || 100;
   return {
     node_id: node.name,
@@ -46,7 +46,7 @@ function enrichNode(node: BackendNode, metrics: any = {}): DisplayNode {
     queue_depth_heavy: metrics.queue_depth_heavy || 0,
     latency_ema_ms: metrics.latency_ema_ms || 0,
     throughput_rps: metrics.throughput_rps || 0,
-    vnode_count: node.vnode_count || 0,
+    vnode_count: vnodeCount || 0,
     total_requests_processed: metrics.total_requests_processed || 0,
     is_healthy: node.grpc_connected,
     cpu_cores: node.cpu_cores || 4,
@@ -85,9 +85,14 @@ function useNodes() {
     const opts = { headers: { 'X-API-Key': 'dev-api-key-change-me' }, signal: AbortSignal.timeout(4000) };
     
     let allocData: any = null;
+    let ringData: any = null;
     try {
-      const resAlloc = await fetch(`${API_BASE_URL}/api/v1/allocation`, opts);
+      const [resAlloc, resRing] = await Promise.all([
+        fetch(`${API_BASE_URL}/api/v1/allocation`, opts),
+        fetch(`${API_BASE_URL}/api/v1/ring`, opts)
+      ]);
       if (resAlloc.ok) allocData = await resAlloc.json();
+      if (resRing.ok) ringData = await resRing.json();
     } catch { /* ignore */ }
 
     try {
@@ -98,7 +103,8 @@ function useNodes() {
         if (backendNodes.length > 0) {
           setNodes(backendNodes.map(n => {
             const metrics = allocData?.node_metrics?.[n.name] || {};
-            return enrichNode(n, metrics);
+            const vnodeCount = ringData?.nodes?.[n.name]?.vnode_count || 0;
+            return enrichNode(n, metrics, vnodeCount);
           }));
           setIsLive(true);
           return;
