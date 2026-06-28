@@ -80,16 +80,6 @@ All services read `config.yaml`. Key parameters:
 | Feedback Interval | 60s | Self-optimization loop |
 | Forecaster Interval | 5s | GRU inference frequency |
 
-## Development Phases
-
-- [x] **Phase 1** — Planning (scenarios, architecture, proto, schema)
-- [x] **Phase 2** — Infrastructure setup (Docker Compose, Prometheus, Grafana)
-- [x] **Phase 3** — Backend core (hash ring, WFQ, traffic gen, allocation engine)
-- [x] **Phase 4** — Database validation under load
-- [x] **Phase 5** — Frontend dashboard (Next.js 14, glassmorphic UI)
-- [ ] **Phase 6** — ML integration (XGBoost + GRU + DAA)
-- [ ] **Phase 7** — Testing (unit, integration, load benchmarks)
-- [ ] **Phase 8** — Deployment & reproducibility
 
 ## License
 
